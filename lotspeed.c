@@ -1,4 +1,4 @@
-// lotspeed.c - v3.4.1 enhanced mainline
+// lotspeed.c - v3.4.2 enhanced mainline
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -892,7 +892,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.4.1 - enhanced mainline                ║\n");
+    pr_info("║      LotSpeed v3.4.2 - enhanced mainline                ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -954,7 +954,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.4.1 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.4.2 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -970,6 +970,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.4.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.4.1 - fixed-rate WAN and corrected adaptive congestion control");
+MODULE_VERSION("3.4.2-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.4.2 - fixed-rate WAN and corrected adaptive congestion control");
 MODULE_ALIAS("tcp_lotspeed");

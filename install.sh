@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.4.1 enhanced installer
+# LotSpeed v3.4.2 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
-# Remote branch:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install.sh | sudo bash
+# Pinned remote release:
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v342.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-main}"
+GITHUB_REF="${LOTSPEED_REF:-v3.4.2}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.4.1-enhanced"
+VERSION="3.4.2-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -92,6 +92,8 @@ prepare_source() {
     fetch_file Makefile
     fetch_file lotspeedctl
     chmod 0755 "${INSTALL_DIR}/lotspeedctl"
+    touch "${INSTALL_DIR}/lotspeed.c" "${INSTALL_DIR}/Makefile" \
+        "${INSTALL_DIR}/lotspeedctl"
 }
 
 build_module() {
