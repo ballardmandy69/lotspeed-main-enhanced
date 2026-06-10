@@ -4,6 +4,35 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
+### main-enhanced
+
+`codex/main-enhanced` 基于 `main`，保留固定速率模式的直接性，并选择性合并其他分支中适合公网高延迟、随机丢包线路的设计：
+
+* 修正 adaptive 模式把 `rate_sample.delivered` 包数误当成字节数的问题。
+* 修正 Linux 6.10 起 `cong_control` 回调签名的兼容边界。
+* ProbeRTT 默认每 30 秒触发 150ms，并保留 50% 原窗口，减少周期性吞吐断崖。
+* 无明显 RTT 膨胀时，对随机丢包使用较温和的退让。
+* RTT 超过 120ms 时可增加 CWND gain，但不会突破 `lotserver_max_cwnd`。
+* 移除不安全的“卸载失败后重新注册算法”流程。
+
+本地测试安装：
+
+```bash
+git switch codex/main-enhanced
+sudo bash install.sh
+lotspeed preset wan-enhanced
+lotspeed status
+```
+
+分支推送后可直接安装：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/codex/main-enhanced/install.sh | sudo bash
+lotspeed preset wan-enhanced
+```
+
+`wan-enhanced` 固化了已验证的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，并启用高延迟补偿和随机丢包保护。
+
 
 ### branch explanation
 

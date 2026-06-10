@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# LotSpeed v3.4 enhanced management utility
+
+set -Eeuo pipefail
+
+VERSION="3.4-enhanced"
+MODULE_NAME="lotspeed"
+PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
+SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
+MODPROBE_FILE="/etc/modprobe.d/lotspeed.conf"
+MODULE_FILE="/lib/modules/$(uname -r)/kernel/net/ipv4/extra/lotspeed.ko"
+LEGACY_MODULE_FILE="/lib/modules/$(uname -r)/kernel/net/ipv4/lotspeed.ko"
+
+green='\033[0;32m'
+yellow='\033[1;33m'
+red='\033[0;31m'
+cyan='\033[0;36m'
+reset='\033[0m'
+
+info() { printf "${green}[INFO]${reset} %s\n" "$*"; }
+warn() { printf "${yellow}[WARN]${reset} %s\n" "$*"; }
+fail() { printf "${red}[ERROR]${reset} %s\n" "$*" >&2; exit 1; }
+
+require_root() {
+    [[ ${EUID} -eq 0 ]] || fail "This command must be run as root."
+}
+
+require_loaded() {
+    [[ -d "${PARAM_DIR}" ]] || fail "LotSpeed is not loaded."
+}
+
+available_cc() {
+    sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true
+}
+
+fallback_cc() {
+    local available
+    available="$(available_cc)"
+    for cc in cubic reno bbr; do
+        if grep -qw "${cc}" <<<"${available}"; then
+            printf '%s\n' "${cc}"
+            return
+        fi
+    done
+    awk '{print $1}' <<<"${available}"
+}
+
+write_param() {
+    local name="$1"
+    local value="$2"
+    local path="${PARAM_DIR}/${name}"
+
+    [[ -f "${path}" ]] || fail "Unknown parameter: ${name}"
+    printf '%s\n' "${value}" > "${path}"
+}
+
+persist_params() {
+    local name value line="options ${MODULE_NAME}"
+
+    while IFS= read -r name; do
+        value="$(<"${PARAM_DIR}/${name}")"
+        line+=" ${name}=${value}"
+    done < <(find "${PARAM_DIR}" -maxdepth 1 -type f -name 'lotserver_*' -printf '%f\n' | sort)
+
+    printf '%s\n' "${line}" > "${MODPROBE_FILE}"
+}
+
+set_param() {
+    local name="${1:-}"
+    local value="${2:-}"
+
+    require_root
+    require_loaded
+    [[ -n "${name}" && -n "${value}" ]] ||
+        fail "Usage: lotspeed set <parameter> <value>"
+    [[ "${name}" =~ ^lotserver_[a-z0-9_]+$ ]] ||
+        fail "Invalid parameter name."
+    write_param "${name}" "${value}"
+    persist_params
+    info "${name}=$(<"${PARAM_DIR}/${name}")"
+}
+
+set_common_safety() {
+    write_param lotserver_turbo 0
+    write_param lotserver_pacing_gain 120
+    write_param lotserver_probe_rtt_interval_ms 30000
+    write_param lotserver_probe_rtt_duration_ms 150
+    write_param lotserver_probe_rtt_cwnd_pct 50
+    write_param lotserver_min_rtt_window_sec 10
+    write_param lotserver_rtt_tolerance_pct 25
+    write_param lotserver_loss_guard 1
+    write_param lotserver_noncong_beta 972
+    write_param lotserver_hd_enable 1
+    write_param lotserver_hd_thresh_us 120000
+    write_param lotserver_hd_gain_boost 20
+}
+
+apply_preset() {
+    local preset="${1:-}"
+
+    require_root
+    require_loaded
+
+    case "${preset}" in
+        wan-enhanced)
+            # Matches the user's proven 256 Mbps fixed-rate profile.
+            write_param lotserver_rate 32000000
+            write_param lotserver_gain 30
+            write_param lotserver_beta 820
+            write_param lotserver_min_cwnd 32
+            write_param lotserver_max_cwnd 6000
+            write_param lotserver_adaptive 0
+            set_common_safety
+            ;;
+        conservative)
+            write_param lotserver_rate 125000000
+            write_param lotserver_gain 15
+            write_param lotserver_beta 717
+            write_param lotserver_min_cwnd 16
+            write_param lotserver_max_cwnd 2000
+            write_param lotserver_adaptive 1
+            set_common_safety
+            ;;
+        balanced)
+            write_param lotserver_rate 625000000
+            write_param lotserver_gain 20
+            write_param lotserver_beta 717
+            write_param lotserver_min_cwnd 16
+            write_param lotserver_max_cwnd 5000
+            write_param lotserver_adaptive 1
+            set_common_safety
+            ;;
+        aggressive)
+            write_param lotserver_rate 1250000000
+            write_param lotserver_gain 30
+            write_param lotserver_beta 819
+            write_param lotserver_min_cwnd 32
+            write_param lotserver_max_cwnd 8000
+            write_param lotserver_adaptive 1
+            set_common_safety
+            ;;
+        fixed-1g)
+            write_param lotserver_rate 125000000
+            write_param lotserver_gain 30
+            write_param lotserver_beta 820
+            write_param lotserver_min_cwnd 32
+            write_param lotserver_max_cwnd 15000
+            write_param lotserver_adaptive 0
+            set_common_safety
+            ;;
+        *)
+            cat <<'EOF'
+Available presets:
+  wan-enhanced  - 256 Mbps fixed-rate, high-delay/loss optimized
+  conservative  - 1 Gbps ceiling, adaptive, low queue pressure
+  balanced      - 5 Gbps ceiling, adaptive
+  aggressive    - 10 Gbps ceiling, adaptive
+  fixed-1g      - 1 Gbps fixed-rate, aggressive WAN profile
+EOF
+            exit 1
+            ;;
+    esac
+
+    sysctl -w net.ipv4.tcp_no_metrics_save=1 >/dev/null
+    persist_params
+    info "Applied ${preset} preset."
+}
+
+show_status() {
+    local current available name value
+
+    current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    available="$(available_cc)"
+
+    printf "${cyan}LotSpeed %s status${reset}\n" "${VERSION}"
+    if [[ -d "${PARAM_DIR}" ]]; then
+        printf 'Module: loaded\n'
+    else
+        printf 'Module: not loaded\n'
+    fi
+    printf 'Active TCP CC: %s\n' "${current:-unknown}"
+    printf 'Available TCP CC: %s\n' "${available:-unknown}"
+    printf 'tcp_no_metrics_save: %s\n' \
+        "$(sysctl -n net.ipv4.tcp_no_metrics_save 2>/dev/null || echo unknown)"
+
+    [[ -d "${PARAM_DIR}" ]] || return
+    printf '\nParameters:\n'
+    while IFS= read -r name; do
+        value="$(<"${PARAM_DIR}/${name}")"
+        case "${name}" in
+            lotserver_rate)
+                printf '  %-32s %s bytes/s (%s Mbps)\n' \
+                    "${name}" "${value}" "$((value * 8 / 1000000))"
+                ;;
+            lotserver_gain)
+                printf '  %-32s %s (%d.%dx cwnd gain)\n' \
+                    "${name}" "${value}" "$((value / 10))" "$((value % 10))"
+                ;;
+            lotserver_beta|lotserver_noncong_beta)
+                printf '  %-32s %s (%d%% retained)\n' \
+                    "${name}" "${value}" "$((value * 100 / 1024))"
+                ;;
+            *)
+                printf '  %-32s %s\n' "${name}" "${value}"
+                ;;
+        esac
+    done < <(find "${PARAM_DIR}" -maxdepth 1 -type f -printf '%f\n' | sort)
+}
+
+start_module() {
+    require_root
+    if ! lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
+        modprobe "${MODULE_NAME}"
+    fi
+    sysctl -w net.ipv4.tcp_congestion_control=lotspeed >/dev/null
+    sysctl -w net.ipv4.tcp_no_metrics_save=1 >/dev/null
+    info "LotSpeed is active."
+}
+
+stop_module() {
+    local fallback
+
+    require_root
+    fallback="$(fallback_cc)"
+    [[ -n "${fallback}" ]] ||
+        fail "No fallback TCP congestion control is available."
+    sysctl -w "net.ipv4.tcp_congestion_control=${fallback}" >/dev/null
+
+    if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
+        if rmmod "${MODULE_NAME}"; then
+            info "LotSpeed stopped; active TCP CC is ${fallback}."
+        else
+            warn "Default CC changed to ${fallback}, but existing sockets still reference LotSpeed."
+        fi
+    else
+        info "LotSpeed is already stopped."
+    fi
+}
+
+restart_module() {
+    require_root
+    stop_module
+    if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
+        fail "Cannot restart while existing sockets reference LotSpeed."
+    fi
+    start_module
+}
+
+show_logs() {
+    dmesg | grep -i lotspeed | tail -n "${1:-50}"
+}
+
+uninstall_module() {
+    local fallback
+
+    require_root
+    fallback="$(fallback_cc)"
+    [[ -n "${fallback}" ]] && sysctl -w "net.ipv4.tcp_congestion_control=${fallback}" >/dev/null
+
+    if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
+        rmmod "${MODULE_NAME}" ||
+            fail "Existing sockets still reference LotSpeed. Close them before uninstalling."
+    fi
+
+    rm -f /etc/modules-load.d/lotspeed.conf "${SYSCTL_FILE}" \
+        "${MODPROBE_FILE}" "${MODULE_FILE}" "${MODULE_FILE}.xz" \
+        "${MODULE_FILE}.zst" "${MODULE_FILE}.gz" "${LEGACY_MODULE_FILE}" \
+        "${LEGACY_MODULE_FILE}.xz" "${LEGACY_MODULE_FILE}.zst" \
+        "${LEGACY_MODULE_FILE}.gz"
+    rm -rf /opt/lotspeed
+    depmod -a
+    rm -f /usr/local/bin/lotspeed
+    info "LotSpeed uninstalled."
+}
+
+show_help() {
+    cat <<'EOF'
+Usage: lotspeed <command> [arguments]
+
+Commands:
+  status                         Show module and parameter status
+  preset <name>                  Apply a tested parameter profile
+  set <parameter> <value>        Change one module parameter
+  start                          Load and activate LotSpeed
+  stop                           Switch away and unload when possible
+  restart                        Reload and activate LotSpeed
+  logs [count]                   Show recent kernel log entries
+  uninstall                      Remove LotSpeed from this kernel
+  help                           Show this help
+EOF
+}
+
+case "${1:-help}" in
+    status) show_status ;;
+    preset) apply_preset "${2:-}" ;;
+    set) set_param "${2:-}" "${3:-}" ;;
+    start) start_module ;;
+    stop) stop_module ;;
+    restart) restart_module ;;
+    logs) show_logs "${2:-50}" ;;
+    uninstall) uninstall_module ;;
+    help|-h|--help) show_help ;;
+    *) fail "Unknown command: $1. Run 'lotspeed help'." ;;
+esac
