@@ -1,4 +1,4 @@
-VERSION		:= 3.4-enhanced
+VERSION		:= 3.4.1-enhanced
 KERNEL_RELEASE  ?= $(shell uname -r)
 KERNEL_DIR      ?= /lib/modules/$(KERNEL_RELEASE)/build
 obj-m           += lotspeed.o
@@ -8,10 +8,10 @@ ccflags-y := -std=gnu99
 .PHONY: all clean load unload
 
 all:
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
+	$(MAKE) -C $(KERNEL_DIR) M=$(CURDIR) modules
 
 clean:
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_DIR) M=$(CURDIR) clean
 
 load:
 	sudo insmod lotspeed.ko

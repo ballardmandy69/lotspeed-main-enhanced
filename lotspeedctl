@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.4 enhanced management utility
+# LotSpeed v3.4.1 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.4-enhanced"
+VERSION="3.4.1-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -27,6 +27,15 @@ require_root() {
 
 require_loaded() {
     [[ -d "${PARAM_DIR}" ]] || fail "LotSpeed is not loaded."
+}
+
+require_params() {
+    local parameter
+
+    for parameter in "$@"; do
+        [[ -f "${PARAM_DIR}/${parameter}" ]] ||
+            fail "Loaded LotSpeed module is missing ${parameter}. Re-run the latest installer before applying this preset."
+    done
 }
 
 available_cc() {
@@ -97,9 +106,30 @@ set_common_safety() {
 
 apply_preset() {
     local preset="${1:-}"
+    local enhanced_parameters=(
+        lotserver_rate
+        lotserver_gain
+        lotserver_beta
+        lotserver_min_cwnd
+        lotserver_max_cwnd
+        lotserver_adaptive
+        lotserver_turbo
+        lotserver_pacing_gain
+        lotserver_probe_rtt_interval_ms
+        lotserver_probe_rtt_duration_ms
+        lotserver_probe_rtt_cwnd_pct
+        lotserver_min_rtt_window_sec
+        lotserver_rtt_tolerance_pct
+        lotserver_loss_guard
+        lotserver_noncong_beta
+        lotserver_hd_enable
+        lotserver_hd_thresh_us
+        lotserver_hd_gain_boost
+    )
 
     require_root
     require_loaded
+    require_params "${enhanced_parameters[@]}"
 
     case "${preset}" in
         wan-enhanced)
@@ -167,14 +197,15 @@ EOF
 }
 
 show_status() {
-    local current available name value
+    local current available loaded_version name value
 
     current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
     available="$(available_cc)"
+    loaded_version="$(cat "/sys/module/${MODULE_NAME}/version" 2>/dev/null || true)"
 
     printf "${cyan}LotSpeed %s status${reset}\n" "${VERSION}"
     if [[ -d "${PARAM_DIR}" ]]; then
-        printf 'Module: loaded\n'
+        printf 'Module: loaded (%s)\n' "${loaded_version:-version unknown}"
     else
         printf 'Module: not loaded\n'
     fi

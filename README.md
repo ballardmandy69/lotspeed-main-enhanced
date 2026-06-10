@@ -34,6 +34,14 @@ lotspeed preset wan-enhanced
 
 `wan-enhanced` 固化了已验证的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，并启用高延迟补偿和随机丢包保护。
 
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.4.1-enhanced` 已修复该问题；重新运行一键安装时，正确日志应显示：
+
+```text
+make -C /lib/modules/.../build M=/opt/lotspeed modules
+```
+
+安装器会在替换旧模块前检查 `.ko` 版本和增强参数，不再接受遗留构建产物。
+
 
 ### branch explanation
 

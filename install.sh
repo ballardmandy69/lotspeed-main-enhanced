@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.4 enhanced installer
+# LotSpeed v3.4.1 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
@@ -15,7 +15,7 @@ GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
 GITHUB_REF="${LOTSPEED_REF:-main}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.4-enhanced"
+VERSION="3.4.1-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -95,10 +95,43 @@ prepare_source() {
 }
 
 build_module() {
+    local built_module="${INSTALL_DIR}/lotspeed.ko"
+
     info "Building for kernel ${KERNEL_RELEASE}..."
     make -C "${INSTALL_DIR}" clean >/dev/null 2>&1 || true
+    rm -f "${built_module}"
     make -C "${INSTALL_DIR}" KERNEL_RELEASE="${KERNEL_RELEASE}"
-    [[ -f "${INSTALL_DIR}/lotspeed.ko" ]] || fail "Build completed without producing lotspeed.ko."
+    [[ -f "${built_module}" ]] || fail "Build completed without producing ${built_module}."
+}
+
+validate_built_module() {
+    local built_module="${INSTALL_DIR}/lotspeed.ko"
+    local built_version parameters parameter
+    local required_parameters=(
+        lotserver_pacing_gain
+        lotserver_probe_rtt_interval_ms
+        lotserver_probe_rtt_duration_ms
+        lotserver_probe_rtt_cwnd_pct
+        lotserver_min_rtt_window_sec
+        lotserver_rtt_tolerance_pct
+        lotserver_loss_guard
+        lotserver_noncong_beta
+        lotserver_hd_enable
+        lotserver_hd_thresh_us
+        lotserver_hd_gain_boost
+    )
+
+    built_version="$(modinfo -F version "${built_module}" 2>/dev/null || true)"
+    [[ "${built_version}" == "${VERSION}" ]] ||
+        fail "Built module version is '${built_version:-unknown}', expected '${VERSION}'. Refusing to install a stale module."
+
+    parameters="$(modinfo -p "${built_module}" 2>/dev/null || true)"
+    for parameter in "${required_parameters[@]}"; do
+        grep -q "^${parameter}:" <<<"${parameters}" ||
+            fail "Built module is missing ${parameter}. Refusing to install an incomplete module."
+    done
+
+    info "Validated module ${built_version} and enhanced parameter set."
 }
 
 choose_fallback_cc() {
@@ -114,7 +147,20 @@ choose_fallback_cc() {
 }
 
 install_module() {
-    local fallback
+    local fallback loaded_version parameter
+    local required_parameters=(
+        lotserver_pacing_gain
+        lotserver_probe_rtt_interval_ms
+        lotserver_probe_rtt_duration_ms
+        lotserver_probe_rtt_cwnd_pct
+        lotserver_min_rtt_window_sec
+        lotserver_rtt_tolerance_pct
+        lotserver_loss_guard
+        lotserver_noncong_beta
+        lotserver_hd_enable
+        lotserver_hd_thresh_us
+        lotserver_hd_gain_boost
+    )
 
     if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
         fallback="$(choose_fallback_cc)"
@@ -132,6 +178,15 @@ install_module() {
 
     grep -qw "${MODULE_NAME}" /proc/sys/net/ipv4/tcp_available_congestion_control ||
         fail "The module loaded but did not register the lotspeed congestion control."
+
+    loaded_version="$(cat "/sys/module/${MODULE_NAME}/version" 2>/dev/null || true)"
+    [[ "${loaded_version}" == "${VERSION}" ]] ||
+        fail "Loaded module version is '${loaded_version:-unknown}', expected '${VERSION}'."
+
+    for parameter in "${required_parameters[@]}"; do
+        [[ -f "/sys/module/${MODULE_NAME}/parameters/${parameter}" ]] ||
+            fail "Loaded module is missing ${parameter}."
+    done
 }
 
 install_management() {
@@ -151,6 +206,7 @@ main() {
     install_dependencies
     prepare_source
     build_module
+    validate_built_module
     install_module
     install_management
 

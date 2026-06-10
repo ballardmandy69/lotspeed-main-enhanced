@@ -1,4 +1,4 @@
-# LotSpeed 3.4 Enhanced
+# LotSpeed 3.4.1 Enhanced
 
 This branch is a conservative performance update on top of `main`.
 
