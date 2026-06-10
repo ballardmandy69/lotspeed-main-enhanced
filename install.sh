@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.4.2 enhanced installer
+# LotSpeed v3.4.3 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v342.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v343.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.4.2}"
+GITHUB_REF="${LOTSPEED_REF:-v3.4.3}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.4.2-enhanced"
+VERSION="3.4.3-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -213,8 +213,8 @@ main() {
     install_management
 
     printf '\nLotSpeed %s installed successfully.\n' "${VERSION}"
-    printf 'Recommended preset for your current profile:\n'
-    printf '  lotspeed preset wan-enhanced\n'
+    printf 'Recommended preset for ordinary China Telecom 163 return paths:\n'
+    printf '  lotspeed preset ct-163-return\n'
     printf 'Check it with:\n'
     printf '  lotspeed status\n'
 }

@@ -1,4 +1,4 @@
-# LotSpeed 3.4.2 Enhanced
+# LotSpeed 3.4.3 Enhanced
 
 This branch is a conservative performance update on top of `main`.
 
@@ -71,3 +71,16 @@ dmesg | grep -i lotspeed
 ```
 
 Track throughput, retransmissions, RTT under load, and any module warnings.
+
+## China Telecom ordinary 163 return path
+
+For overseas servers sending to China Telecom over ordinary non-CN2 routes:
+
+```bash
+lotspeed preset ct-163-return
+```
+
+This uses adaptive rate control with a 256 Mbps per-connection ceiling,
+95% pacing, 2.0x CWND gain, 75% congestion retention, and treats every loss
+as a congestion signal. High-delay gain compensation is disabled because
+ordinary 163 congestion is usually made worse by filling a larger queue.

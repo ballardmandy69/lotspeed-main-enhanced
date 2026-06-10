@@ -28,13 +28,21 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v342.sh | sudo bash
-lotspeed preset wan-enhanced
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v343.sh | sudo bash
+lotspeed preset ct-163-return
 ```
 
 `wan-enhanced` 固化了已验证的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，并启用高延迟补偿和随机丢包保护。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.4.2-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+普通非 CN2 电信 163 回国方向建议：
+
+```bash
+lotspeed preset ct-163-return
+```
+
+该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
+
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.4.3-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules
