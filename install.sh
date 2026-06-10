@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
 # LotSpeed v3.4 enhanced installer
-# Repository: https://github.com/uk0/lotspeed
+# Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Remote branch:
-#   wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/codex/main-enhanced/install.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install.sh | sudo bash
 
 set -Eeuo pipefail
 
-GITHUB_REPO="${LOTSPEED_REPO:-uk0/lotspeed}"
-GITHUB_REF="${LOTSPEED_REF:-codex/main-enhanced}"
+GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
+GITHUB_REF="${LOTSPEED_REF:-main}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
 VERSION="3.4-enhanced"

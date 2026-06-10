@@ -6,7 +6,7 @@
 
 ### main-enhanced
 
-`codex/main-enhanced` 基于 `main`，保留固定速率模式的直接性，并选择性合并其他分支中适合公网高延迟、随机丢包线路的设计：
+本仓库的 `main` 基于 [`uk0/lotspeed`](https://github.com/uk0/lotspeed) 的 `main`，保留固定速率模式的直接性，并选择性合并其他分支中适合公网高延迟、随机丢包线路的设计：
 
 * 修正 adaptive 模式把 `rate_sample.delivered` 包数误当成字节数的问题。
 * 修正 Linux 6.10 起 `cong_control` 回调签名的兼容边界。
@@ -18,7 +18,8 @@
 本地测试安装：
 
 ```bash
-git switch codex/main-enhanced
+git clone https://github.com/ballardmandy69/lotspeed-main-enhanced.git
+cd lotspeed-main-enhanced
 sudo bash install.sh
 lotspeed preset wan-enhanced
 lotspeed status
@@ -27,7 +28,7 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/codex/main-enhanced/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install.sh | sudo bash
 lotspeed preset wan-enhanced
 ```
 
