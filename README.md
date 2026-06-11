@@ -4,6 +4,18 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
+### v3.5.0 国内混合终端版
+
+海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v350.sh | sudo bash
+lotspeed preset domestic-mixed
+lotspeed status
+```
+
+`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。自适应速率下限为上限的 50%（当前配置为 128 Mbps），并优先保持近期实际交付速率的 90%，避免差线路恢复时长期趴在低速。该下限偏激进，弱移动网络可能产生更多重传。
+
 ### main-enhanced
 
 本仓库的 `main` 基于 [`uk0/lotspeed`](https://github.com/uk0/lotspeed) 的 `main`，保留固定速率模式的直接性，并选择性合并其他分支中适合公网高延迟、随机丢包线路的设计：
@@ -28,8 +40,8 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v343.sh | sudo bash
-lotspeed preset ct-163-return
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v350.sh | sudo bash
+lotspeed preset domestic-mixed
 ```
 
 `wan-enhanced` 固化了已验证的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，并启用高延迟补偿和随机丢包保护。
@@ -42,7 +54,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.4.3-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.0-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules

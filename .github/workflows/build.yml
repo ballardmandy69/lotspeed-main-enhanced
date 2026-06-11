@@ -1,0 +1,23 @@
+name: Build kernel module
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential linux-headers-generic linux-headers-generic-hwe-24.04
+      - name: Build
+        run: |
+          mapfile -t headers < <(find /usr/src -maxdepth 1 -type d -name 'linux-headers-*-generic' | sort -V)
+          test "${#headers[@]}" -gt 0
+          for header_dir in "${headers[@]}"; do
+            make clean KERNEL_DIR="${header_dir}" || true
+            make KERNEL_DIR="${header_dir}"
+          done

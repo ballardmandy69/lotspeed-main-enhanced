@@ -1,4 +1,4 @@
-# LotSpeed 3.4.3 Enhanced
+# LotSpeed 3.5.0 Enhanced
 
 This branch is a conservative performance update on top of `main`.
 
@@ -6,28 +6,30 @@ This branch is a conservative performance update on top of `main`.
 
 ```bash
 sudo bash install.sh
-lotspeed preset wan-enhanced
+lotspeed preset domestic-mixed
 lotspeed status
 ```
 
-The preset keeps the user's proven fixed-rate configuration:
+The recommended preset keeps the 256 Mbps ceiling while adapting each TCP
+connection independently for mixed fixed-line, WiFi, mobile and campus users:
 
 | Parameter | Value |
 | --- | ---: |
 | `lotserver_rate` | `32000000` bytes/s |
-| `lotserver_gain` | `30` |
-| `lotserver_beta` | `820` |
+| `lotserver_gain` | `26` |
+| `lotserver_beta` | `900` |
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `6000` packets |
-| `lotserver_adaptive` | `0` |
-| `lotserver_pacing_gain` | `120` percent |
+| `lotserver_adaptive` | `1` |
+| `lotserver_pacing_gain` | `105` percent |
+| `lotserver_min_rate_pct` | `50` percent |
 | `lotserver_loss_guard` | `1` |
-| `lotserver_noncong_beta` | `972` |
-| `lotserver_hd_enable` | `1` |
+| `lotserver_noncong_beta` | `1000` |
+| `lotserver_hd_enable` | `0` |
 | `lotserver_hd_thresh_us` | `120000` |
 | `lotserver_hd_gain_boost` | `20` percent |
-| `lotserver_probe_rtt_interval_ms` | `30000` |
-| `lotserver_probe_rtt_duration_ms` | `150` |
+| `lotserver_probe_rtt_interval_ms` | `60000` |
+| `lotserver_probe_rtt_duration_ms` | `100` |
 | `lotserver_probe_rtt_cwnd_pct` | `50` percent |
 
 The installer also persists:
@@ -42,14 +44,14 @@ Preset and individual `lotspeed set` changes are saved in
 
 ## What changed
 
-1. Correct adaptive bandwidth samples from packets to bytes.
-2. Use the four-argument congestion-control callback on Linux 6.10+.
-3. Probe bandwidth on a time interval instead of increasing it on every ACK.
-4. Refresh stale minimum RTT measurements when the route baseline changes.
-5. Use RTT inflation to separate likely congestion from random WAN loss.
-6. Retain part of the prior CWND during ProbeRTT.
-7. Apply bounded high-delay CWND gain compensation.
-8. Saturate rate and CWND arithmetic and validate module parameters.
+1. Classify each TCP connection independently as stable, jittery or congested.
+2. Measure adjacent-sample RTT jitter instead of treating all queue delay as jitter.
+3. Add hysteresis so transient WiFi or mobile spikes do not constantly change mode.
+4. Keep adaptive throughput anchored to recent delivered rate.
+5. Use a configurable adaptive floor; `domestic-mixed` keeps at least 50%.
+6. Preserve ACK clock and in-flight data while congestion settles.
+7. Use mode-specific CWND gain, pacing and loss retention.
+8. Retain the corrected bandwidth sampling and Linux 6.10+ compatibility.
 
 ## Deliberately not merged
 

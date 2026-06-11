@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.4.3 enhanced installer
+# LotSpeed v3.5.0 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v343.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v350.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.4.3}"
+GITHUB_REF="${LOTSPEED_REF:-v3.5.0}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.4.3-enhanced"
+VERSION="3.5.0-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -116,6 +116,7 @@ validate_built_module() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
+        lotserver_min_rate_pct
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable
@@ -157,6 +158,7 @@ install_module() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
+        lotserver_min_rate_pct
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable
@@ -213,8 +215,8 @@ main() {
     install_management
 
     printf '\nLotSpeed %s installed successfully.\n' "${VERSION}"
-    printf 'Recommended preset for ordinary China Telecom 163 return paths:\n'
-    printf '  lotspeed preset ct-163-return\n'
+    printf 'Recommended preset for mixed clients in China:\n'
+    printf '  lotspeed preset domestic-mixed\n'
     printf 'Check it with:\n'
     printf '  lotspeed status\n'
 }

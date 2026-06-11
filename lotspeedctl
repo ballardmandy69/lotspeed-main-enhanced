@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.4.3 enhanced management utility
+# LotSpeed v3.5.0 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.4.3-enhanced"
+VERSION="3.5.0-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -97,6 +97,7 @@ set_common_safety() {
     write_param lotserver_probe_rtt_cwnd_pct 50
     write_param lotserver_min_rtt_window_sec 10
     write_param lotserver_rtt_tolerance_pct 25
+    write_param lotserver_min_rate_pct 50
     write_param lotserver_loss_guard 1
     write_param lotserver_noncong_beta 972
     write_param lotserver_hd_enable 1
@@ -120,6 +121,7 @@ apply_preset() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
+        lotserver_min_rate_pct
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable
@@ -132,6 +134,23 @@ apply_preset() {
     require_params "${enhanced_parameters[@]}"
 
     case "${preset}" in
+        domestic-mixed|domestic)
+            # Overseas server to mixed Chinese fixed, WiFi and mobile users.
+            write_param lotserver_rate 32000000
+            write_param lotserver_gain 26
+            write_param lotserver_beta 900
+            write_param lotserver_min_cwnd 32
+            write_param lotserver_max_cwnd 6000
+            write_param lotserver_adaptive 1
+            set_common_safety
+            write_param lotserver_pacing_gain 105
+            write_param lotserver_min_rate_pct 50
+            write_param lotserver_noncong_beta 1000
+            write_param lotserver_hd_enable 0
+            write_param lotserver_min_rtt_window_sec 30
+            write_param lotserver_probe_rtt_interval_ms 60000
+            write_param lotserver_probe_rtt_duration_ms 100
+            ;;
         ct-163-return|ct-return)
             # Overseas server to China Telecom over ordinary 163 routes.
             write_param lotserver_rate 32000000
@@ -198,6 +217,7 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
+  domestic-mixed - Mixed China fixed, WiFi, mobile and campus clients
   ct-163-return - Overseas to China Telecom ordinary 163 route
   wan-enhanced  - 256 Mbps fixed-rate, high-delay/loss optimized
   conservative  - 1 Gbps ceiling, adaptive, low queue pressure
