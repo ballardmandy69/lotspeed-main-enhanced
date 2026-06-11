@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.5.1 enhanced installer
+# LotSpeed v3.5.2 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v351.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.5.1}"
+GITHUB_REF="${LOTSPEED_REF:-v3.5.2}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.5.1-enhanced"
+VERSION="3.5.2-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -117,6 +117,9 @@ validate_built_module() {
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
         lotserver_min_rate_pct
+        lotserver_loss_congest_pct
+        lotserver_loss_recover_pct
+        lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable
@@ -159,6 +162,9 @@ install_module() {
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
         lotserver_min_rate_pct
+        lotserver_loss_congest_pct
+        lotserver_loss_recover_pct
+        lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable

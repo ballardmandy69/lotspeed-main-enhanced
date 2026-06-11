@@ -1,4 +1,4 @@
-# LotSpeed 3.5.1 Enhanced
+# LotSpeed 3.5.2 Enhanced
 
 This branch is a conservative performance update on top of `main`.
 
@@ -23,6 +23,10 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | `lotserver_adaptive` | `1` |
 | `lotserver_pacing_gain` | `105` percent |
 | `lotserver_min_rate_pct` | `60` percent |
+| `lotserver_loss_congest_pct` | `20` percent |
+| `lotserver_loss_recover_pct` | `8` percent |
+| `lotserver_rtt_confirm_samples` | `12` |
+| `lotserver_rtt_tolerance_pct` | `60` percent |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
 | `lotserver_hd_enable` | `0` |
@@ -46,7 +50,7 @@ Preset and individual `lotspeed set` changes are saved in
 
 1. Classify each TCP connection independently as stable, jittery or congested.
 2. Measure adjacent-sample RTT jitter instead of treating all queue delay as jitter.
-3. Add hysteresis so transient WiFi or mobile spikes do not constantly change mode.
+3. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
 4. Keep adaptive throughput anchored to recent delivered rate.
 5. Use a configurable adaptive floor; `domestic-mixed` keeps at least 60%.
 6. Preserve ACK clock and in-flight data while congestion settles.

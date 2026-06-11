@@ -1,4 +1,4 @@
-// lotspeed.c - v3.5.1 domestic mixed-access edition
+// lotspeed.c - v3.5.2 relaxed domestic mixed-access edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -36,9 +36,6 @@
 #define LOTSPEED_MAX_U32 ((u32)~0U)
 #define LOTSPEED_MAX_U64 ((u64)~0ULL)
 #define LOTSPEED_LOSS_SCALE 1024
-#define LOTSPEED_LOSS_CONGESTED 51
-#define LOTSPEED_LOSS_RECOVERED 25
-#define LOTSPEED_RTT_CONFIRM_SAMPLES 3
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -61,8 +58,11 @@ static unsigned int lotserver_probe_rtt_interval_ms = 30000;
 static unsigned int lotserver_probe_rtt_duration_ms = 150;
 static unsigned int lotserver_probe_rtt_cwnd_pct = 50;
 static unsigned int lotserver_min_rtt_window_sec = 10;
-static unsigned int lotserver_rtt_tolerance_pct = 25;
+static unsigned int lotserver_rtt_tolerance_pct = 60;
 static unsigned int lotserver_min_rate_pct = 60;
+static unsigned int lotserver_loss_congest_pct = 20;
+static unsigned int lotserver_loss_recover_pct = 8;
+static unsigned int lotserver_rtt_confirm_samples = 12;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 972;      // 95% cwnd on likely random loss
 static bool lotserver_hd_enable = true;
@@ -281,6 +281,15 @@ MODULE_PARM_DESC(lotserver_rtt_tolerance_pct, "RTT inflation tolerance percent")
 
 module_param_cb(lotserver_min_rate_pct, &param_ops_percent, &lotserver_min_rate_pct, 0644);
 MODULE_PARM_DESC(lotserver_min_rate_pct, "Adaptive minimum rate as percent of rate ceiling");
+
+module_param_cb(lotserver_loss_congest_pct, &param_ops_percent, &lotserver_loss_congest_pct, 0644);
+MODULE_PARM_DESC(lotserver_loss_congest_pct, "Loss EWMA percent required to classify congestion");
+
+module_param_cb(lotserver_loss_recover_pct, &param_ops_percent, &lotserver_loss_recover_pct, 0644);
+MODULE_PARM_DESC(lotserver_loss_recover_pct, "Loss EWMA percent required to remain congested");
+
+module_param_cb(lotserver_rtt_confirm_samples, &param_ops_percent, &lotserver_rtt_confirm_samples, 0644);
+MODULE_PARM_DESC(lotserver_rtt_confirm_samples, "Consecutive RTT inflation samples required for congestion");
 
 module_param(lotserver_loss_guard, bool, 0644);
 MODULE_PARM_DESC(lotserver_loss_guard, "Use RTT to distinguish likely random loss");
@@ -537,7 +546,7 @@ static bool lotspeed_rtt_inflated(const struct lotspeed *ca, u32 rtt_us)
 
     threshold = ca->rtt_min;
     threshold += div_u64((u64)ca->rtt_min * lotserver_rtt_tolerance_pct, 100);
-    threshold += (u64)ca->rtt_dev * 2;
+    threshold += (u64)ca->rtt_dev * 4;
     return rtt_us > threshold;
 }
 
@@ -549,6 +558,8 @@ static void lotspeed_update_path_mode(struct sock *sk,
     u64 total_packets;
     u32 sample_loss = 0;
     u32 losses = 0;
+    u32 loss_congest;
+    u32 loss_recover;
     u32 jitter_threshold;
     u8 old_mode = ca->path_mode;
     bool raw_inflated = lotspeed_rtt_inflated(ca, rtt_us);
@@ -557,7 +568,8 @@ static void lotspeed_update_path_mode(struct sock *sk,
         if (ca->rtt_high_count < 255)
             ca->rtt_high_count++;
     } else if (ca->rtt_high_count > 0) {
-        ca->rtt_high_count--;
+        ca->rtt_high_count = ca->rtt_high_count > 2 ?
+                             ca->rtt_high_count - 2 : 0;
     }
 
     if (rs && (rs->delivered > 0 || rs->losses > 0)) {
@@ -572,14 +584,18 @@ static void lotspeed_update_path_mode(struct sock *sk,
         ca->loss_ewma = (ca->loss_ewma * 15 + sample_loss) / 16;
     }
 
-    jitter_threshold = max_t(u32, ca->rtt_min / 8, 3000);
+    loss_congest = lotserver_loss_congest_pct * LOTSPEED_LOSS_SCALE / 100;
+    loss_recover = lotserver_loss_recover_pct * LOTSPEED_LOSS_SCALE / 100;
+    jitter_threshold = max_t(u32, ca->rtt_min / 4, 8000);
 
-    if (ca->rtt_high_count >= LOTSPEED_RTT_CONFIRM_SAMPLES ||
-        ca->loss_ewma >= LOTSPEED_LOSS_CONGESTED) {
+    if (ca->loss_ewma >= loss_congest ||
+        (ca->rtt_high_count >= lotserver_rtt_confirm_samples &&
+         ca->loss_ewma >= loss_recover)) {
         ca->path_mode = PATH_CONGESTED;
     } else if (ca->path_mode == PATH_CONGESTED &&
-               (ca->rtt_high_count > 0 ||
-                ca->loss_ewma > LOTSPEED_LOSS_RECOVERED)) {
+               (ca->loss_ewma > loss_recover ||
+                (ca->rtt_high_count > lotserver_rtt_confirm_samples / 3 &&
+                 ca->loss_ewma > loss_recover / 2))) {
         ca->path_mode = PATH_CONGESTED;
     } else if (ca->rtt_dev >= jitter_threshold ||
                (ca->path_mode == PATH_JITTERY &&
@@ -622,13 +638,13 @@ static u32 lotspeed_cruise_headroom(const struct lotspeed *ca)
 {
     switch (ca->path_mode) {
         case PATH_STABLE:
-            return 108;
+            return 110;
         case PATH_JITTERY:
-            return 105;
+            return 108;
         case PATH_CONGESTED:
-            return 102;
-        default:
             return 105;
+        default:
+            return 108;
     }
 }
 
@@ -741,9 +757,9 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
                 ca->target_rate = min_t(u64, lotserver_rate,
                                         lotspeed_scale_percent(
                                             ca->target_rate,
-                                            ca->path_mode == PATH_STABLE ? 105 :
-                                            ca->path_mode == PATH_JITTERY ? 103 :
-                                            101));
+                                            ca->path_mode == PATH_STABLE ? 108 :
+                                            ca->path_mode == PATH_JITTERY ? 106 :
+                                            103));
                 ca->probe_cnt = now;
                 if (ca->actual_rate >
                     lotspeed_scale_percent(ca->target_rate, 90))
@@ -807,10 +823,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         effective_gain = min_t(u32, LOTSPEED_MAX_GAIN,
                                effective_gain +
                                effective_gain * lotserver_hd_gain_boost / 100);
-    if (ca->path_mode == PATH_JITTERY)
+    if (ca->path_mode == PATH_CONGESTED)
         effective_gain = max_t(u32, effective_gain * 98 / 100, 10);
-    else if (ca->path_mode == PATH_CONGESTED)
-        effective_gain = max_t(u32, effective_gain * 95 / 100, 10);
 
     switch (ca->state) {
         case STARTUP:
@@ -826,7 +840,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             ca->cwnd_gain = effective_gain;
             break;
         case AVOIDING:
-            ca->cwnd_gain = max_t(u32, effective_gain * 95 / 100, 10);
+            ca->cwnd_gain = max_t(u32, effective_gain * 98 / 100, 10);
             break;
         case PROBE_RTT:
             ca->cwnd_gain = effective_gain;
@@ -1059,7 +1073,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.5.1 - domestic mixed access            ║\n");
+    pr_info("║      LotSpeed v3.5.2 - relaxed domestic access          ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1097,6 +1111,9 @@ static int __init lotspeed_module_init(void)
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
     pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
             lotserver_min_rate_pct);
+    pr_info("  Congestion: loss %u%%/%u%% | RTT +%u%% for %u samples\n",
+            lotserver_loss_congest_pct, lotserver_loss_recover_pct,
+            lotserver_rtt_tolerance_pct, lotserver_rtt_confirm_samples);
     pr_info("  Loss Guard: %s | High Delay: %s (%uus, +%u%% gain)\n",
             lotserver_loss_guard ? "ON" : "OFF",
             lotserver_hd_enable ? "ON" : "OFF",
@@ -1123,7 +1140,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.5.1 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.5.2 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1139,6 +1156,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.5.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.5.1 - per-connection domestic mixed-access congestion control");
+MODULE_VERSION("3.5.2-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.5.2 - relaxed per-connection domestic congestion control");
 MODULE_ALIAS("tcp_lotspeed");

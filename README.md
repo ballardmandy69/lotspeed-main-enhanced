@@ -4,17 +4,17 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.5.1 国内混合终端版
+### v3.5.2 国内混合终端宽松判定版
 
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v351.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
 
-`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。默认 `gain=30`，拥塞保留约 85%，自适应速率下限为上限的 60%（当前配置为 153.6 Mbps），并优先保持近期实际交付速率的 90%。该配置非常激进，弱移动网络可能产生更多排队和重传。
+`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。默认 `gain=30`，拥塞保留约 85%，自适应速率下限为上限的 60%（当前配置为 153.6 Mbps）。拥塞判定已放宽到约 20% 丢包；RTT 超过“基线 + 60% + 4 倍 Jitter”持续 12 个样本时，还必须同时有至少约 8% 丢包才进入拥塞。单纯高延迟或大 Jitter 不再判定拥塞。
 
 ### main-enhanced
 
@@ -40,7 +40,7 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v351.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
@@ -54,7 +54,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.1-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.2-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules

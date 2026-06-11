@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.5.1 enhanced management utility
+# LotSpeed v3.5.2 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.5.1-enhanced"
+VERSION="3.5.2-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -96,8 +96,11 @@ set_common_safety() {
     write_param lotserver_probe_rtt_duration_ms 150
     write_param lotserver_probe_rtt_cwnd_pct 50
     write_param lotserver_min_rtt_window_sec 10
-    write_param lotserver_rtt_tolerance_pct 25
+    write_param lotserver_rtt_tolerance_pct 60
     write_param lotserver_min_rate_pct 60
+    write_param lotserver_loss_congest_pct 20
+    write_param lotserver_loss_recover_pct 8
+    write_param lotserver_rtt_confirm_samples 12
     write_param lotserver_loss_guard 1
     write_param lotserver_noncong_beta 972
     write_param lotserver_hd_enable 1
@@ -122,6 +125,9 @@ apply_preset() {
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
         lotserver_min_rate_pct
+        lotserver_loss_congest_pct
+        lotserver_loss_recover_pct
+        lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
         lotserver_hd_enable
@@ -145,6 +151,10 @@ apply_preset() {
             set_common_safety
             write_param lotserver_pacing_gain 105
             write_param lotserver_min_rate_pct 60
+            write_param lotserver_rtt_tolerance_pct 60
+            write_param lotserver_loss_congest_pct 20
+            write_param lotserver_loss_recover_pct 8
+            write_param lotserver_rtt_confirm_samples 12
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             write_param lotserver_min_rtt_window_sec 30
