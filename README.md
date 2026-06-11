@@ -4,17 +4,17 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.5.0 国内混合终端版
+### v3.5.1 国内混合终端版
 
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v350.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v351.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
 
-`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。自适应速率下限为上限的 50%（当前配置为 128 Mbps），并优先保持近期实际交付速率的 90%，避免差线路恢复时长期趴在低速。该下限偏激进，弱移动网络可能产生更多重传。
+`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。默认 `gain=30`，拥塞保留约 85%，自适应速率下限为上限的 60%（当前配置为 153.6 Mbps），并优先保持近期实际交付速率的 90%。该配置非常激进，弱移动网络可能产生更多排队和重传。
 
 ### main-enhanced
 
@@ -40,7 +40,7 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v350.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v351.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
@@ -54,7 +54,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.0-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.1-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules
@@ -114,8 +114,8 @@ dmesg -w
 |:-----------------------------------|:----------------------------------------------------------| :--- | :--- | :--- | :--- |
 | **`lotserver_rate`**               | **全局物理带宽上限**<br>控制服务器发包的物理天花板，防止撑爆网卡或被运营商QoS。             | **Bytes/sec**<br>100Mbps ≈ 12,500,000 | 125000000<br>(1Gbps) | **物理带宽的 90% - 95%** | **必填项**。设为你的 VPS 物理端口带宽上限（如 100M 口设为 `11500000`）。不要设得比物理带宽大。 |
 | **`lotserver_start_rate`**         | **zeta-tcp版本独有，软启动初始速率**<br>新连接建立时的起步速度。保护小带宽客户端不被瞬间流量淹没。 | **Bytes/sec**<br>10Mbps ≈ 1,250,000 | 6250000<br>(50Mbps) | **物理带宽的 30% - 50%** | 对于 100M 口，建议设为 `5000000` (40Mbps) 到 `7500000` (60Mbps)。设太高会导致起步丢包，设太低起步慢。 |
-| **`lotserver_gain`**               | **拥塞窗口增益 (Pacing Gain)**<br>倍率因子。决定算法有多“激进”地去抢占带宽。        | **数值 / 10**<br>20 = 2.0倍 | 20 | **15 (1.5倍) - 30 (3.0倍)** | **核心激进参数**。<br>20 (2.0x) 是平衡点；<br>25-30 (2.5x-3.0x) 适合极高丢包线路，但增加重传消耗。 |
-| **`lotserver_beta`**               | **丢包退让比例 (Fairness)**<br>当发生严重拥塞必须降速时，保留多少窗口。             | **数值 / 1024**<br>717 ≈ 保留70% | 717 | **614 (60%) - 921 (90%)** | 设得越高，降速越不情愿（越头铁）。<br>推荐 `819` (80%) 适合跨国线路。<br>`921` (90%) 极其激进。 |
+| **`lotserver_gain`**               | **拥塞窗口增益 (Pacing Gain)**<br>倍率因子。决定算法有多“激进”地去抢占带宽。        | **数值 / 10**<br>30 = 3.0倍 | 30 | **15 (1.5倍) - 30 (3.0倍)** | 当前国内混合终端配置默认使用 `30`，优先维持足够在途数据。 |
+| **`lotserver_beta`**               | **丢包退让比例 (Fairness)**<br>当发生严重拥塞必须降速时，保留多少窗口。             | **数值 / 1024**<br>871 ≈ 保留85% | 871 | **614 (60%) - 921 (90%)** | 当前默认 `871`，发生拥塞时保留约 85.06% 的窗口。 |
 | **`lotserver_min_cwnd`**           | **最小拥塞窗口**<br>无论网络多差，窗口绝不低于此值。                            | **Packets (包数)** | 16 | **4 - 64** | 16 是安全值。设为 `32` 或 `64` 可以提高起步速度，但在拥塞时可能加剧丢包。 |
 | **`lotserver_max_cwnd`**           | **最大拥塞窗口**<br>窗口的绝对物理上限，防止 Bufferbloat。                   | **Packets (包数)** | 15000 | **5000 - 30000** | 100Mbps 建议 `5000-8000`。<br>1Gbps 建议 `15000-25000`。<br>设太大无意义，会占用内存。 |
 | **`lotserver_turbo`**              | **暴力模式 (Turbo)**<br>是否无视所有丢包信号。                           | **0 (关) / 1 (开)** | 0 | **建议 0** | 除非你在进行压力测试，否则不要开。开启后容易被运营商直接断流。 |

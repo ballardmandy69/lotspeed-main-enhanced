@@ -1,4 +1,4 @@
-# LotSpeed 3.5.0 Enhanced
+# LotSpeed 3.5.1 Enhanced
 
 This branch is a conservative performance update on top of `main`.
 
@@ -16,13 +16,13 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | Parameter | Value |
 | --- | ---: |
 | `lotserver_rate` | `32000000` bytes/s |
-| `lotserver_gain` | `26` |
-| `lotserver_beta` | `900` |
+| `lotserver_gain` | `30` |
+| `lotserver_beta` | `871` |
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `6000` packets |
 | `lotserver_adaptive` | `1` |
 | `lotserver_pacing_gain` | `105` percent |
-| `lotserver_min_rate_pct` | `50` percent |
+| `lotserver_min_rate_pct` | `60` percent |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
 | `lotserver_hd_enable` | `0` |
@@ -48,7 +48,7 @@ Preset and individual `lotspeed set` changes are saved in
 2. Measure adjacent-sample RTT jitter instead of treating all queue delay as jitter.
 3. Add hysteresis so transient WiFi or mobile spikes do not constantly change mode.
 4. Keep adaptive throughput anchored to recent delivered rate.
-5. Use a configurable adaptive floor; `domestic-mixed` keeps at least 50%.
+5. Use a configurable adaptive floor; `domestic-mixed` keeps at least 60%.
 6. Preserve ACK clock and in-flight data while congestion settles.
 7. Use mode-specific CWND gain, pacing and loss retention.
 8. Retain the corrected bandwidth sampling and Linux 6.10+ compatibility.

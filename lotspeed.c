@@ -1,4 +1,4 @@
-// lotspeed.c - v3.5.0 domestic mixed-access edition
+// lotspeed.c - v3.5.1 domestic mixed-access edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -49,10 +49,10 @@
 
 // --- 可调参数 ---
 static unsigned long lotserver_rate = 125000000ULL;  // 1Gbps 最高速率上限
-static unsigned int lotserver_gain = 15;               // 1.5x 默认增益 (BBR-style)
+static unsigned int lotserver_gain = 30;               // 3.0x default gain
 static unsigned int lotserver_min_cwnd = 32;           // 最小拥塞窗口
 static unsigned int lotserver_max_cwnd = 10000;        // 最大拥塞窗口
-static unsigned int lotserver_beta = 616;              // about 60% cwnd on congestion
+static unsigned int lotserver_beta = 871;              // about 85% cwnd retained
 static bool lotserver_adaptive = true;
 static bool lotserver_turbo = false;
 static bool lotserver_verbose = false;
@@ -62,7 +62,7 @@ static unsigned int lotserver_probe_rtt_duration_ms = 150;
 static unsigned int lotserver_probe_rtt_cwnd_pct = 50;
 static unsigned int lotserver_min_rtt_window_sec = 10;
 static unsigned int lotserver_rtt_tolerance_pct = 25;
-static unsigned int lotserver_min_rate_pct = 50;
+static unsigned int lotserver_min_rate_pct = 60;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 972;      // 95% cwnd on likely random loss
 static bool lotserver_hd_enable = true;
@@ -1059,7 +1059,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.5.0 - domestic mixed access            ║\n");
+    pr_info("║      LotSpeed v3.5.1 - domestic mixed access            ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1123,7 +1123,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.5.0 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.5.1 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1139,6 +1139,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.5.0-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.5.0 - per-connection domestic mixed-access congestion control");
+MODULE_VERSION("3.5.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.5.1 - per-connection domestic mixed-access congestion control");
 MODULE_ALIAS("tcp_lotspeed");

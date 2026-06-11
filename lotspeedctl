@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.5.0 enhanced management utility
+# LotSpeed v3.5.1 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.5.0-enhanced"
+VERSION="3.5.1-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -97,7 +97,7 @@ set_common_safety() {
     write_param lotserver_probe_rtt_cwnd_pct 50
     write_param lotserver_min_rtt_window_sec 10
     write_param lotserver_rtt_tolerance_pct 25
-    write_param lotserver_min_rate_pct 50
+    write_param lotserver_min_rate_pct 60
     write_param lotserver_loss_guard 1
     write_param lotserver_noncong_beta 972
     write_param lotserver_hd_enable 1
@@ -137,14 +137,14 @@ apply_preset() {
         domestic-mixed|domestic)
             # Overseas server to mixed Chinese fixed, WiFi and mobile users.
             write_param lotserver_rate 32000000
-            write_param lotserver_gain 26
-            write_param lotserver_beta 900
+            write_param lotserver_gain 30
+            write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
             write_param lotserver_max_cwnd 6000
             write_param lotserver_adaptive 1
             set_common_safety
             write_param lotserver_pacing_gain 105
-            write_param lotserver_min_rate_pct 50
+            write_param lotserver_min_rate_pct 60
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             write_param lotserver_min_rtt_window_sec 30
