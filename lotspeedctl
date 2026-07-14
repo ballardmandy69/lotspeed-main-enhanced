@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.5.2 enhanced management utility
+# LotSpeed v3.6.0 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.5.2-enhanced"
+VERSION="3.6.0-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -146,7 +146,7 @@ apply_preset() {
             write_param lotserver_gain 30
             write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
-            write_param lotserver_max_cwnd 6000
+            write_param lotserver_max_cwnd 10000
             write_param lotserver_adaptive 1
             set_common_safety
             write_param lotserver_pacing_gain 105
@@ -240,6 +240,9 @@ EOF
     esac
 
     sysctl -w net.ipv4.tcp_no_metrics_save=1 >/dev/null
+    if ! sysctl -w net.core.default_qdisc=fq >/dev/null; then
+        warn "Could not select fq as the default qdisc; TCP internal pacing remains active."
+    fi
     persist_params
     info "Applied ${preset} preset."
 }
@@ -261,6 +264,8 @@ show_status() {
     printf 'Available TCP CC: %s\n' "${available:-unknown}"
     printf 'tcp_no_metrics_save: %s\n' \
         "$(sysctl -n net.ipv4.tcp_no_metrics_save 2>/dev/null || echo unknown)"
+    printf 'default_qdisc: %s\n' \
+        "$(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
 
     [[ -d "${PARAM_DIR}" ]] || return
     printf '\nParameters:\n'
@@ -293,6 +298,9 @@ start_module() {
     fi
     sysctl -w net.ipv4.tcp_congestion_control=lotspeed >/dev/null
     sysctl -w net.ipv4.tcp_no_metrics_save=1 >/dev/null
+    if ! sysctl -w net.core.default_qdisc=fq >/dev/null; then
+        warn "Could not select fq as the default qdisc; TCP internal pacing remains active."
+    fi
     info "LotSpeed is active."
 }
 

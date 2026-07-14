@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.5.2 enhanced installer
+# LotSpeed v3.6.0 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v360.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.5.2}"
+GITHUB_REF="${LOTSPEED_REF:-v3.6.0}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.5.2-enhanced"
+VERSION="3.6.0-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -207,6 +207,12 @@ install_management() {
 net.ipv4.tcp_congestion_control=lotspeed
 net.ipv4.tcp_no_metrics_save=1
 EOF
+
+    if modprobe sch_fq 2>/dev/null; then
+        printf '%s\n' 'net.core.default_qdisc=fq' >> /etc/sysctl.d/99-lotspeed.conf
+    else
+        warn "sch_fq is unavailable; TCP internal pacing will be used."
+    fi
     sysctl -p /etc/sysctl.d/99-lotspeed.conf >/dev/null
 }
 

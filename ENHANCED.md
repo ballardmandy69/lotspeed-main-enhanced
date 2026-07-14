@@ -1,6 +1,6 @@
-# LotSpeed 3.5.2 Enhanced
+# LotSpeed 3.6.0 Enhanced
 
-This branch is a conservative performance update on top of `main`.
+This branch is a speed-first performance update on top of `main`.
 
 ## Recommended profile
 
@@ -19,7 +19,7 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | `lotserver_gain` | `30` |
 | `lotserver_beta` | `871` |
 | `lotserver_min_cwnd` | `32` packets |
-| `lotserver_max_cwnd` | `6000` packets |
+| `lotserver_max_cwnd` | `10000` packets |
 | `lotserver_adaptive` | `1` |
 | `lotserver_pacing_gain` | `105` percent |
 | `lotserver_min_rate_pct` | `60` percent |
@@ -41,21 +41,27 @@ The installer also persists:
 ```text
 net.ipv4.tcp_congestion_control=lotspeed
 net.ipv4.tcp_no_metrics_save=1
+net.core.default_qdisc=fq
 ```
 
 Preset and individual `lotspeed set` changes are saved in
 `/etc/modprobe.d/lotspeed.conf`, so they survive a module reload or reboot.
 
+The 60% value is a sender-side target floor. It prevents the controller from
+voluntarily backing off below 153.6 Mbps, but no TCP algorithm can guarantee
+goodput above the physical bottleneck after loss and protocol overhead.
+
 ## What changed
 
-1. Classify each TCP connection independently as stable, jittery or congested.
-2. Measure adjacent-sample RTT jitter instead of treating all queue delay as jitter.
-3. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
-4. Keep adaptive throughput anchored to recent delivered rate.
-5. Use a configurable adaptive floor; `domestic-mixed` keeps at least 60%.
-6. Preserve ACK clock and in-flight data while congestion settles.
-7. Use mode-specific CWND gain, pacing and loss retention.
-8. Retain the corrected bandwidth sampling and Linux 6.10+ compatibility.
+1. Update delivery rate and loss once per packet-timed RTT instead of per ACK.
+2. Ignore app-limited samples when they would lower the bandwidth estimate.
+3. Compensate CWND for ACK aggregation common on WiFi and mobile access.
+4. Calculate BDP from minimum RTT plus bounded jitter, not queued RTT.
+5. Keep the adaptive send target at or above 60% of the configured ceiling.
+6. Keep ProbeRTT at or above one BDP of the speed floor.
+7. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
+8. Prefer the `fq` qdisc while retaining TCP internal pacing as a fallback.
+9. Retain the corrected byte accounting and Linux 6.10+ compatibility.
 
 ## Deliberately not merged
 

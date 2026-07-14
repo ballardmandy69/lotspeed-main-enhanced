@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Check scripts and release metadata
+        run: |
+          bash -n install.sh install-v360.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.6.0-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.6.0-enhanced"' install.sh
+          grep -q 'VERSION="3.6.0-enhanced"' lotspeedctl
       - name: Install kernel headers
         run: |
           sudo apt-get update

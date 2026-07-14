@@ -4,17 +4,17 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.5.2 国内混合终端宽松判定版
+### v3.6.0 国内混合终端速度优先版
 
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v360.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
 
-`domestic-mixed` 保留每连接 256 Mbps 上限，但每条 TCP 连接会独立识别稳定、抖动和拥塞状态。默认 `gain=30`，拥塞保留约 85%，自适应速率下限为上限的 60%（当前配置为 153.6 Mbps）。拥塞判定已放宽到约 20% 丢包；RTT 超过“基线 + 60% + 4 倍 Jitter”持续 12 个样本时，还必须同时有至少约 8% 丢包才进入拥塞。单纯高延迟或大 Jitter 不再判定拥塞。
+`domestic-mixed` 保留每连接 256 Mbps 上限，默认 `gain=30`、拥塞保留约 85%，发送目标下限固定为上限的 60%（当前配置为 153.6 Mbps），`max_cwnd=10000`。每条 TCP 连接按 RTT 轮次独立更新交付率和丢包，忽略会拉低带宽估计的 app-limited 样本，并对 WiFi、移动网络常见的 ACK 聚合补充窗口。拥塞判定仍要求约 20% 丢包，或连续 12 个 RTT 轮次出现明显排队并伴随至少约 8% 丢包；单纯高延迟或大 Jitter 不会压低速度底线。
 
 ### main-enhanced
 
@@ -24,7 +24,9 @@ lotspeed status
 * 修正 Linux 6.10 起 `cong_control` 回调签名的兼容边界。
 * ProbeRTT 默认每 30 秒触发 150ms，并保留 50% 原窗口，减少周期性吞吐断崖。
 * 无明显 RTT 膨胀时，对随机丢包使用较温和的退让。
-* RTT 超过 120ms 时可增加 CWND gain，但不会突破 `lotserver_max_cwnd`。
+* CWND 按最小 RTT 加有界 Jitter 计算，避免排队 RTT 反向放大队列。
+* 按 RTT 轮次过滤交付率、丢包和 ACK 聚合，减少 ACK 频率造成的误判。
+* ProbeRTT 不会把窗口降到维持发送速度底线所需的 1 BDP 以下。
 * 移除不安全的“卸载失败后重新注册算法”流程。
 
 本地测试安装：
@@ -33,14 +35,14 @@ lotspeed status
 git clone https://github.com/ballardmandy69/lotspeed-main-enhanced.git
 cd lotspeed-main-enhanced
 sudo bash install.sh
-lotspeed preset wan-enhanced
+lotspeed preset domestic-mixed
 lotspeed status
 ```
 
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v352.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v360.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
@@ -54,7 +56,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.5.2-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.0-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules
@@ -112,12 +114,12 @@ dmesg -w
 
 | 参数名称 (`sysctl`/`module`)           | 作用说明 (Description)                                        | 单位/换算 (Unit) | 默认值 | 推荐范围 (Ratio/Range) | 调整建议 |
 |:-----------------------------------|:----------------------------------------------------------| :--- | :--- | :--- | :--- |
-| **`lotserver_rate`**               | **全局物理带宽上限**<br>控制服务器发包的物理天花板，防止撑爆网卡或被运营商QoS。             | **Bytes/sec**<br>100Mbps ≈ 12,500,000 | 125000000<br>(1Gbps) | **物理带宽的 90% - 95%** | **必填项**。设为你的 VPS 物理端口带宽上限（如 100M 口设为 `11500000`）。不要设得比物理带宽大。 |
+| **`lotserver_rate`**               | **每连接目标速率上限**<br>该参数全局配置，但分别应用到每条 TCP 连接，不是服务器总带宽整形器。             | **Bytes/sec**<br>256Mbps = 32,000,000 | 125000000<br>(1Gbps) | 按单连接目标设置 | 多连接总发送量可以超过该值；服务器总出口限制应交给 qdisc 或外部整形。 |
 | **`lotserver_start_rate`**         | **zeta-tcp版本独有，软启动初始速率**<br>新连接建立时的起步速度。保护小带宽客户端不被瞬间流量淹没。 | **Bytes/sec**<br>10Mbps ≈ 1,250,000 | 6250000<br>(50Mbps) | **物理带宽的 30% - 50%** | 对于 100M 口，建议设为 `5000000` (40Mbps) 到 `7500000` (60Mbps)。设太高会导致起步丢包，设太低起步慢。 |
 | **`lotserver_gain`**               | **拥塞窗口增益 (Pacing Gain)**<br>倍率因子。决定算法有多“激进”地去抢占带宽。        | **数值 / 10**<br>30 = 3.0倍 | 30 | **15 (1.5倍) - 30 (3.0倍)** | 当前国内混合终端配置默认使用 `30`，优先维持足够在途数据。 |
 | **`lotserver_beta`**               | **丢包退让比例 (Fairness)**<br>当发生严重拥塞必须降速时，保留多少窗口。             | **数值 / 1024**<br>871 ≈ 保留85% | 871 | **614 (60%) - 921 (90%)** | 当前默认 `871`，发生拥塞时保留约 85.06% 的窗口。 |
 | **`lotserver_min_cwnd`**           | **最小拥塞窗口**<br>无论网络多差，窗口绝不低于此值。                            | **Packets (包数)** | 16 | **4 - 64** | 16 是安全值。设为 `32` 或 `64` 可以提高起步速度，但在拥塞时可能加剧丢包。 |
-| **`lotserver_max_cwnd`**           | **最大拥塞窗口**<br>窗口的绝对物理上限，防止 Bufferbloat。                   | **Packets (包数)** | 15000 | **5000 - 30000** | 100Mbps 建议 `5000-8000`。<br>1Gbps 建议 `15000-25000`。<br>设太大无意义，会占用内存。 |
+| **`lotserver_max_cwnd`**           | **最大拥塞窗口**<br>窗口的绝对物理上限，防止 Bufferbloat。                   | **Packets (包数)** | 10000 | **5000 - 30000** | 国内混合预设使用 `10000`，给 300-400ms 路径保留足够在途数据。<br>更高值会增加每连接内存和排队压力。 |
 | **`lotserver_turbo`**              | **暴力模式 (Turbo)**<br>是否无视所有丢包信号。                           | **0 (关) / 1 (开)** | 0 | **建议 0** | 除非你在进行压力测试，否则不要开。开启后容易被运营商直接断流。 |
 | **`lotserver_safe_mode`**          | **zeta-tcp版本独有，安全熔断 (Safe Mode)**<br>是否在丢包率 >15% 时强制介入降速。              | **0 (关) / 1 (开)** | 1 | **建议 1** | 建议始终开启。这是防止 SSH 断连的最后一道防线。 |
 
