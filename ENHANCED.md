@@ -1,4 +1,4 @@
-# LotSpeed 3.6.0 Enhanced
+# LotSpeed 3.6.1 Enhanced
 
 This branch is a speed-first performance update on top of `main`.
 
@@ -23,6 +23,7 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | `lotserver_adaptive` | `1` |
 | `lotserver_pacing_gain` | `105` percent |
 | `lotserver_min_rate_pct` | `60` percent |
+| `lotserver_min_flight_ms` | `0` (disabled) |
 | `lotserver_loss_congest_pct` | `20` percent |
 | `lotserver_loss_recover_pct` | `8` percent |
 | `lotserver_rtt_confirm_samples` | `12` |
@@ -51,6 +52,20 @@ The 60% value is a sender-side target floor. It prevents the controller from
 voluntarily backing off below 153.6 Mbps, but no TCP algorithm can guarantee
 goodput above the physical bottleneck after loss and protocol overhead.
 
+## Long-lived TCP Mux profile
+
+For a small number of high-BDP Nyanpass-style tunnel sockets:
+
+```bash
+lotspeed preset mux-throughput
+```
+
+This profile fixes the target at 256 Mbps, keeps 105% pacing, and reserves at
+least 250ms of target-rate flight data (about 8MB or 5479 packets at MSS 1460).
+It also persists 32MB initial and 64MB maximum TCP send/receive buffers. The
+larger flight window masks delayed or compressed ACK intervals without raising
+the pacing ceiling. It is intentionally not enabled by the general presets.
+
 ## What changed
 
 1. Update delivery rate and loss once per packet-timed RTT instead of per ACK.
@@ -61,7 +76,8 @@ goodput above the physical bottleneck after loss and protocol overhead.
 6. Keep ProbeRTT at or above one BDP of the speed floor.
 7. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
 8. Prefer the `fq` qdisc while retaining TCP internal pacing as a fallback.
-9. Retain the corrected byte accounting and Linux 6.10+ compatibility.
+9. Add an optional minimum flight-time window for long-lived Mux tunnels.
+10. Retain the corrected byte accounting and Linux 6.10+ compatibility.
 
 ## Deliberately not merged
 

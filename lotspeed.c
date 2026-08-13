@@ -1,4 +1,4 @@
-// lotspeed.c - v3.6.0 speed-first domestic mixed-access edition
+// lotspeed.c - v3.6.1 speed-first domestic mixed-access edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -61,6 +61,7 @@ static unsigned int lotserver_probe_rtt_cwnd_pct = 50;
 static unsigned int lotserver_min_rtt_window_sec = 10;
 static unsigned int lotserver_rtt_tolerance_pct = 60;
 static unsigned int lotserver_min_rate_pct = 60;
+static unsigned int lotserver_min_flight_ms = 0;
 static unsigned int lotserver_loss_congest_pct = 20;
 static unsigned int lotserver_loss_recover_pct = 8;
 static unsigned int lotserver_rtt_confirm_samples = 12;
@@ -266,6 +267,17 @@ static int param_set_msec(const char *val, const struct kernel_param *kp)
     return ret;
 }
 
+static int param_set_optional_flight_msec(const char *val,
+                                          const struct kernel_param *kp)
+{
+    int ret = param_set_uint(val, kp);
+    unsigned int *value = kp->arg;
+
+    if (!ret)
+        *value = min_t(unsigned int, *value, 2000);
+    return ret;
+}
+
 static int param_set_usec(const char *val, const struct kernel_param *kp)
 {
     int ret = param_set_uint(val, kp);
@@ -300,6 +312,7 @@ static const struct kernel_param_ops param_ops_loss_congest = { .set = param_set
 static const struct kernel_param_ops param_ops_loss_recover = { .set = param_set_loss_recover, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_confirm_rounds = { .set = param_set_confirm_rounds, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_msec = { .set = param_set_msec, .get = param_get_uint, };
+static const struct kernel_param_ops param_ops_optional_flight_msec = { .set = param_set_optional_flight_msec, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_usec = { .set = param_set_usec, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_seconds = { .set = param_set_seconds, .get = param_get_uint, };
 
@@ -348,6 +361,9 @@ MODULE_PARM_DESC(lotserver_rtt_tolerance_pct, "RTT inflation tolerance percent")
 
 module_param_cb(lotserver_min_rate_pct, &param_ops_floor_percent, &lotserver_min_rate_pct, 0644);
 MODULE_PARM_DESC(lotserver_min_rate_pct, "Adaptive minimum rate as percent of rate ceiling");
+
+module_param_cb(lotserver_min_flight_ms, &param_ops_optional_flight_msec, &lotserver_min_flight_ms, 0644);
+MODULE_PARM_DESC(lotserver_min_flight_ms, "Minimum target-rate flight window in milliseconds (0 disables)");
 
 module_param_cb(lotserver_loss_congest_pct, &param_ops_loss_congest, &lotserver_loss_congest_pct, 0644);
 MODULE_PARM_DESC(lotserver_loss_congest_pct, "Loss EWMA percent required to classify congestion");
@@ -991,6 +1007,17 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             div64_u64((u64)target_cwnd * ca->cwnd_gain, 10),
             LOTSPEED_MAX_U32);
 
+        if (lotserver_min_flight_ms &&
+            ca->target_rate <= div64_u64(LOTSPEED_MAX_U64,
+                                         lotserver_min_flight_ms)) {
+            u32 flight_floor = (u32)min_t(u64,
+                div64_u64(ca->target_rate * lotserver_min_flight_ms,
+                          (u64)mss * 1000),
+                LOTSPEED_MAX_U32);
+
+            target_cwnd = max(target_cwnd, flight_floor);
+        }
+
         ack_rate = ca->actual_rate ?
                    min_t(u64, ca->actual_rate, ca->target_rate) :
                    ca->target_rate;
@@ -1237,7 +1264,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.6.0 - speed-first domestic access      ║\n");
+    pr_info("║      LotSpeed v3.6.1 - speed-first domestic access      ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1275,6 +1302,8 @@ static int __init lotspeed_module_init(void)
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
     pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
             lotserver_min_rate_pct);
+    pr_info("  Minimum Flight Window: %u ms\n",
+            lotserver_min_flight_ms);
     pr_info("  Congestion: loss %u%%/%u%% | RTT +%u%% for %u rounds\n",
             lotserver_loss_congest_pct, lotserver_loss_recover_pct,
             lotserver_rtt_tolerance_pct, lotserver_rtt_confirm_samples);
@@ -1304,7 +1333,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.6.0 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.6.1 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1320,6 +1349,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.6.0-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.6.0 - speed-floor per-connection domestic congestion control");
+MODULE_VERSION("3.6.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.6.1 - Mux-aware speed-floor domestic congestion control");
 MODULE_ALIAS("tcp_lotspeed");
