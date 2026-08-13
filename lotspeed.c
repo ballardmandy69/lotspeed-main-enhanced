@@ -1,4 +1,4 @@
-// lotspeed.c - v3.6.1 speed-first domestic mixed-access edition
+// lotspeed.c - v3.6.2 speed-first domestic mixed-access edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -52,6 +52,7 @@ static unsigned int lotserver_min_cwnd = 32;           // 最小拥塞窗口
 static unsigned int lotserver_max_cwnd = 10000;        // 最大拥塞窗口
 static unsigned int lotserver_beta = 871;              // about 85% cwnd retained
 static bool lotserver_adaptive = true;
+static bool lotserver_congestion_only = false;
 static bool lotserver_turbo = false;
 static bool lotserver_verbose = false;
 static unsigned int lotserver_pacing_gain = 120;       // pacing rate percent
@@ -62,6 +63,7 @@ static unsigned int lotserver_min_rtt_window_sec = 10;
 static unsigned int lotserver_rtt_tolerance_pct = 60;
 static unsigned int lotserver_min_rate_pct = 60;
 static unsigned int lotserver_min_flight_ms = 0;
+static unsigned int lotserver_avoid_hold_ms = 500;
 static unsigned int lotserver_loss_congest_pct = 20;
 static unsigned int lotserver_loss_recover_pct = 8;
 static unsigned int lotserver_rtt_confirm_samples = 12;
@@ -332,6 +334,9 @@ MODULE_PARM_DESC(lotserver_max_cwnd, "Maximum congestion window");
 module_param_cb(lotserver_adaptive, &param_ops_adaptive, &lotserver_adaptive, 0644);
 MODULE_PARM_DESC(lotserver_adaptive, "Enable adaptive rate control");
 
+module_param(lotserver_congestion_only, bool, 0644);
+MODULE_PARM_DESC(lotserver_congestion_only, "Apply adaptive rate control only while avoiding congestion");
+
 module_param_cb(lotserver_turbo, &param_ops_turbo, &lotserver_turbo, 0644);
 MODULE_PARM_DESC(lotserver_turbo, "Turbo mode - ignore all congestion signals");
 
@@ -364,6 +369,9 @@ MODULE_PARM_DESC(lotserver_min_rate_pct, "Adaptive minimum rate as percent of ra
 
 module_param_cb(lotserver_min_flight_ms, &param_ops_optional_flight_msec, &lotserver_min_flight_ms, 0644);
 MODULE_PARM_DESC(lotserver_min_flight_ms, "Minimum target-rate flight window in milliseconds (0 disables)");
+
+module_param_cb(lotserver_avoid_hold_ms, &param_ops_msec, &lotserver_avoid_hold_ms, 0644);
+MODULE_PARM_DESC(lotserver_avoid_hold_ms, "Minimum congestion-avoidance hold time in milliseconds");
 
 module_param_cb(lotserver_loss_congest_pct, &param_ops_loss_congest, &lotserver_loss_congest_pct, 0644);
 MODULE_PARM_DESC(lotserver_loss_congest_pct, "Loss EWMA percent required to classify congestion");
@@ -535,7 +543,10 @@ static void lotspeed_init(struct sock *sk)
                 atomic_read(&active_connections),
                 gbps_int, gbps_frac,
                 gain_int, gain_frac,
-                lotserver_turbo ? "TURBO" : (lotserver_adaptive ? "adaptive" : "fixed"),
+                lotserver_turbo ? "TURBO" :
+                (!lotserver_adaptive ? "fixed" :
+                 (lotserver_congestion_only ? "congestion-only" :
+                  "adaptive")),
                 state_to_str(ca->state));
     }
 }
@@ -642,14 +653,19 @@ static void lotspeed_update_path_mode(struct sock *sk,
     u32 loss_recover;
     u32 jitter_threshold;
     u8 old_mode = ca->path_mode;
+    u8 decay = 2;
     bool raw_inflated = lotspeed_rtt_inflated(ca, rtt_us);
 
     if (raw_inflated) {
         if (ca->rtt_high_count < 255)
             ca->rtt_high_count++;
     } else if (ca->rtt_high_count > 0) {
-        ca->rtt_high_count = ca->rtt_high_count > 2 ?
-                             ca->rtt_high_count - 2 : 0;
+        if (lotserver_congestion_only &&
+            ca->path_mode == PATH_CONGESTED)
+            decay = 8;
+
+        ca->rtt_high_count = ca->rtt_high_count > decay ?
+                             ca->rtt_high_count - decay : 0;
     }
 
     if (delivered || losses) {
@@ -808,6 +824,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     u32 pipe;
     u64 adaptive_floor;
     bool congestion_detected = false;
+    bool continuous_adaptive;
     bool rtt_inflated;
     bool high_delay_path;
 
@@ -829,6 +846,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     lotspeed_update_round_model(sk, rs, mss, path_rtt);
     rtt_inflated = ca->path_mode == PATH_CONGESTED;
     adaptive_floor = lotspeed_adaptive_floor(ca);
+    continuous_adaptive = lotserver_adaptive &&
+                          !lotserver_congestion_only;
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
@@ -854,7 +873,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case STARTUP:
             if (congestion_detected) {
                 enter_state(sk, AVOIDING);
-            } else if (lotserver_adaptive && ca->actual_rate > 0 &&
+            } else if (continuous_adaptive && ca->actual_rate > 0 &&
                        time_after32(now, ca->probe_cnt +
                                     msecs_to_jiffies(LOTSPEED_RATE_SAMPLE_MS))) {
                 if (!ca->last_bw ||
@@ -874,7 +893,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
                     ca->ss_mode = false;
                     enter_state(sk, PROBING);
                 }
-            } else if (!lotserver_adaptive &&
+            } else if (!continuous_adaptive &&
                        time_after32(now, ca->last_state_ts +
                                     msecs_to_jiffies(LOTSPEED_PROBE_RATE_MS))) {
                 ca->ss_mode = false;
@@ -885,7 +904,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case PROBING:
             if (congestion_detected) {
                 enter_state(sk, AVOIDING);
-            } else if (!lotserver_adaptive) {
+            } else if (!continuous_adaptive) {
                 enter_state(sk, CRUISING);
             } else if (time_after32(now, ca->probe_cnt +
                                     msecs_to_jiffies(LOTSPEED_PROBE_RATE_MS))) {
@@ -905,7 +924,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case CRUISING:
             if (congestion_detected) {
                 enter_state(sk, AVOIDING);
-            } else if (lotserver_adaptive && ca->actual_rate > 0) {
+            } else if (continuous_adaptive && ca->actual_rate > 0) {
                 ca->target_rate = clamp_t(u64,
                                           lotspeed_scale_percent(
                                               ca->actual_rate,
@@ -913,7 +932,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
                                           adaptive_floor,
                                           (u64)lotserver_rate);
             }
-            if (!congestion_detected && lotserver_adaptive &&
+            if (!congestion_detected && continuous_adaptive &&
                 time_after32(now, ca->last_cruise_ts +
                              msecs_to_jiffies(LOTSPEED_CRUISE_TIME_MS))) {
                 ca->probe_cnt = now;
@@ -936,7 +955,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             }
             if (!congestion_detected &&
                 time_after32(now, ca->last_state_ts +
-                             msecs_to_jiffies(LOTSPEED_PROBE_RATE_MS))) {
+                             msecs_to_jiffies(lotserver_avoid_hold_ms))) {
                 enter_state(sk, CRUISING);
             }
             break;
@@ -950,7 +969,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             break;
     }
 
-    if (!lotserver_adaptive)
+    if (!lotserver_adaptive ||
+        (lotserver_congestion_only && ca->state != AVOIDING))
         ca->target_rate = lotserver_rate;
 
     effective_gain = lotserver_gain;
@@ -965,7 +985,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case STARTUP:
             ca->cwnd_gain = min_t(u32, LOTSPEED_MAX_GAIN,
                                   effective_gain * 12 / 10);
-            if (lotserver_adaptive)
+            if (continuous_adaptive)
                 ca->target_rate = lotserver_rate;
             break;
         case PROBING:
@@ -1034,7 +1054,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         u32 retained = (u32)div_u64((u64)ca->probe_prior_cwnd *
                                     min_t(u32, lotserver_probe_rtt_cwnd_pct, 100),
                                     100);
-        u64 probe_rate = lotserver_adaptive ? adaptive_floor :
+        u64 probe_rate = continuous_adaptive ? adaptive_floor :
                          ca->target_rate;
         u32 probe_floor = 0;
 
@@ -1264,7 +1284,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.6.1 - speed-first domestic access      ║\n");
+    pr_info("║      LotSpeed v3.6.2 - speed-first domestic access      ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1293,8 +1313,9 @@ static int __init lotspeed_module_init(void)
     pr_info("  Max Gain: %u.%ux\n", gain_int, gain_frac);
     pr_info("  Min/Max CWND: %u/%u\n", lotserver_min_cwnd, lotserver_max_cwnd);
     pr_info("  Fairness Beta: %u/1024\n", lotserver_beta);
-    pr_info("  Adaptive: %s | Turbo: %s | Verbose: %s\n",
+    pr_info("  Adaptive: %s | Congestion-only: %s | Turbo: %s | Verbose: %s\n",
              lotserver_adaptive ? "ON" : "OFF",
+             lotserver_congestion_only ? "ON" : "OFF",
              lotserver_turbo ? "ON" : "OFF",
              lotserver_verbose ? "ON" : "OFF");
     pr_info("  Pacing Gain: %u%% | ProbeRTT: %ums/%ums/%u%% cwnd\n",
@@ -1304,6 +1325,7 @@ static int __init lotspeed_module_init(void)
             lotserver_min_rate_pct);
     pr_info("  Minimum Flight Window: %u ms\n",
             lotserver_min_flight_ms);
+    pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
     pr_info("  Congestion: loss %u%%/%u%% | RTT +%u%% for %u rounds\n",
             lotserver_loss_congest_pct, lotserver_loss_recover_pct,
             lotserver_rtt_tolerance_pct, lotserver_rtt_confirm_samples);
@@ -1333,7 +1355,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.6.1 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.6.2 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1349,6 +1371,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.6.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.6.1 - Mux-aware speed-floor domestic congestion control");
+MODULE_VERSION("3.6.2-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.6.2 - congestion-gated Mux throughput control");
 MODULE_ALIAS("tcp_lotspeed");

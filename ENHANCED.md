@@ -1,4 +1,4 @@
-# LotSpeed 3.6.1 Enhanced
+# LotSpeed 3.6.2 Enhanced
 
 This branch is a speed-first performance update on top of `main`.
 
@@ -21,9 +21,11 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `10000` packets |
 | `lotserver_adaptive` | `1` |
+| `lotserver_congestion_only` | `0` |
 | `lotserver_pacing_gain` | `105` percent |
 | `lotserver_min_rate_pct` | `60` percent |
 | `lotserver_min_flight_ms` | `0` (disabled) |
+| `lotserver_avoid_hold_ms` | `500` milliseconds |
 | `lotserver_loss_congest_pct` | `20` percent |
 | `lotserver_loss_recover_pct` | `8` percent |
 | `lotserver_rtt_confirm_samples` | `12` |
@@ -60,11 +62,15 @@ For a small number of high-BDP Nyanpass-style tunnel sockets:
 lotspeed preset mux-throughput
 ```
 
-This profile fixes the target at 256 Mbps, keeps 105% pacing, and reserves at
-least 250ms of target-rate flight data (about 8MB or 5479 packets at MSS 1460).
-It also persists 32MB initial and 64MB maximum TCP send/receive buffers. The
-larger flight window masks delayed or compressed ACK intervals without raising
-the pacing ceiling. It is intentionally not enabled by the general presets.
+This profile holds the target at 256 Mbps outside confirmed congestion and
+keeps 105% pacing. Adaptive control runs only in AVOIDING, with a 75% (192 Mbps)
+floor, a relaxed 30% pure-loss trigger, and an RTT-plus-25%-loss trigger that
+must persist for 20 packet-timed rounds. The recovery threshold is 25%, RTT
+confirmation decays rapidly after the path clears, and AVOIDING lasts at least
+250ms. ECN or a TCP Loss state still enters AVOIDING immediately.
+The profile also reserves at least 250ms of target-rate flight data (about 8MB
+or 5479 packets at MSS 1460) and persists 32MB initial and 64MB maximum TCP
+send/receive buffers.
 
 ## What changed
 
@@ -77,7 +83,8 @@ the pacing ceiling. It is intentionally not enabled by the general presets.
 7. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
 8. Prefer the `fq` qdisc while retaining TCP internal pacing as a fallback.
 9. Add an optional minimum flight-time window for long-lived Mux tunnels.
-10. Retain the corrected byte accounting and Linux 6.10+ compatibility.
+10. Add congestion-only adaptive control with a configurable fast exit hold.
+11. Retain the corrected byte accounting and Linux 6.10+ compatibility.
 
 ## Deliberately not merged
 

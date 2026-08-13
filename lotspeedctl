@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.6.1 enhanced management utility
+# LotSpeed v3.6.2 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.6.1-enhanced"
+VERSION="3.6.2-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -113,6 +113,8 @@ set_common_safety() {
     write_param lotserver_rtt_tolerance_pct 60
     write_param lotserver_min_rate_pct 60
     write_param lotserver_min_flight_ms 0
+    write_param lotserver_congestion_only 0
+    write_param lotserver_avoid_hold_ms 500
     write_param lotserver_loss_congest_pct 20
     write_param lotserver_loss_recover_pct 8
     write_param lotserver_rtt_confirm_samples 12
@@ -132,6 +134,7 @@ apply_preset() {
         lotserver_min_cwnd
         lotserver_max_cwnd
         lotserver_adaptive
+        lotserver_congestion_only
         lotserver_turbo
         lotserver_pacing_gain
         lotserver_probe_rtt_interval_ms
@@ -141,6 +144,7 @@ apply_preset() {
         lotserver_rtt_tolerance_pct
         lotserver_min_rate_pct
         lotserver_min_flight_ms
+        lotserver_avoid_hold_ms
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
         lotserver_rtt_confirm_samples
@@ -178,16 +182,23 @@ apply_preset() {
             write_param lotserver_probe_rtt_duration_ms 100
             ;;
         mux-throughput|mux)
-            # Fixed-rate tunnel profile for a few long-lived Mux sockets.
+            # Congestion-gated profile for a few long-lived Mux sockets.
             write_param lotserver_rate 32000000
             write_param lotserver_gain 30
             write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
             write_param lotserver_max_cwnd 10000
-            write_param lotserver_adaptive 0
+            write_param lotserver_adaptive 1
             set_common_safety
+            write_param lotserver_congestion_only 1
+            write_param lotserver_avoid_hold_ms 250
             write_param lotserver_min_flight_ms 250
             write_param lotserver_pacing_gain 105
+            write_param lotserver_min_rate_pct 75
+            write_param lotserver_rtt_tolerance_pct 80
+            write_param lotserver_loss_congest_pct 30
+            write_param lotserver_loss_recover_pct 25
+            write_param lotserver_rtt_confirm_samples 20
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             write_param lotserver_min_rtt_window_sec 30
@@ -263,7 +274,7 @@ apply_preset() {
             cat <<'EOF'
 Available presets:
   domestic-mixed - Mixed China fixed, WiFi, mobile and campus clients
-  mux-throughput - 256 Mbps fixed-rate profile for long-lived TCP Mux tunnels
+  mux-throughput - 256 Mbps congestion-gated adaptive profile for TCP Mux
   ct-163-return - Overseas to China Telecom ordinary 163 route
   wan-enhanced  - 256 Mbps fixed-rate, high-delay/loss optimized
   conservative  - 1 Gbps ceiling, adaptive, low queue pressure

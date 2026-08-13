@@ -11,10 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.6.1-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.6.1-enhanced"' install.sh
-          grep -q 'VERSION="3.6.1-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.6.2-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.6.2-enhanced"' install.sh
+          grep -q 'VERSION="3.6.2-enhanced"' lotspeedctl
+          grep -q 'write_param lotserver_congestion_only 1' lotspeedctl
+          grep -q 'write_param lotserver_min_rate_pct 75' lotspeedctl
+          grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
+          grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
       - name: Install kernel headers
         run: |
           sudo apt-get update
