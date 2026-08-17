@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.6.2 enhanced management utility
+# LotSpeed v3.6.3 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.6.2-enhanced"
+VERSION="3.6.3-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -77,11 +77,12 @@ persist_params() {
 
 configure_mux_buffers() {
     cat > "${MUX_SYSCTL_FILE}" <<'EOF'
-# LotSpeed Mux profile: few long-lived high-BDP tunnel sockets.
-net.core.rmem_max=67108864
-net.core.wmem_max=67108864
-net.ipv4.tcp_rmem=8192 33554432 67108864
-net.ipv4.tcp_wmem=8192 33554432 67108864
+# LotSpeed throughput profile: bounded per-socket memory for many TCP clients.
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=8192 262144 16777216
+net.ipv4.tcp_wmem=8192 262144 16777216
+net.ipv4.tcp_notsent_lowat=131072
 net.ipv4.tcp_moderate_rcvbuf=1
 net.ipv4.tcp_window_scaling=1
 EOF
@@ -313,10 +314,16 @@ show_status() {
         "$(sysctl -n net.ipv4.tcp_no_metrics_save 2>/dev/null || echo unknown)"
     printf 'default_qdisc: %s\n' \
         "$(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
+    printf 'core_rmem_max: %s\n' \
+        "$(sysctl -n net.core.rmem_max 2>/dev/null || echo unknown)"
+    printf 'core_wmem_max: %s\n' \
+        "$(sysctl -n net.core.wmem_max 2>/dev/null || echo unknown)"
     printf 'tcp_rmem: %s\n' \
         "$(sysctl -n net.ipv4.tcp_rmem 2>/dev/null || echo unknown)"
     printf 'tcp_wmem: %s\n' \
         "$(sysctl -n net.ipv4.tcp_wmem 2>/dev/null || echo unknown)"
+    printf 'tcp_notsent_lowat: %s\n' \
+        "$(sysctl -n net.ipv4.tcp_notsent_lowat 2>/dev/null || echo unknown)"
 
     [[ -d "${PARAM_DIR}" ]] || return
     printf '\nParameters:\n'

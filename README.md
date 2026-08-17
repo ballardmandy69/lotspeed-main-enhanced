@@ -4,24 +4,36 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.6.2 Mux 拥塞门控版
+### v3.6.3 Mux 内存控制版
 
-针对 Nyanpass 等少量长生命周期 TCP Mux 隧道：
+针对 Nyanpass 等长生命周期 TCP Mux 隧道，以及用户连接数较多的服务器：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v362.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v363.sh | sudo bash
 lotspeed preset mux-throughput
 lotspeed status
 ```
 
-`mux-throughput` 平时固定保持 256 Mbps 目标和 105% pacing，只有确认严重拥塞时才启用 adaptive。进入门槛放宽为约 30% 丢包，或 RTT 明显膨胀并伴随至少约 25% 丢包持续 20 个 RTT 轮次；拥塞分类解除且至少经过 250ms 后立即恢复固定目标。adaptive 的发送目标地板为 75%（192 Mbps）。该预设还保留 250ms 最小在途窗口，并把 TCP 初始/最大收发缓冲设为 32MB/64MB。ECN 拥塞标记或 TCP 进入 Loss 状态仍会立即触发保护。
+`mux-throughput` 平时固定保持 256 Mbps 目标和 105% pacing，只有确认严重拥塞时才启用 adaptive。进入门槛放宽为约 30% 丢包，或 RTT 明显膨胀并伴随至少约 25% 丢包持续 20 个 RTT 轮次；拥塞分类解除且至少经过 250ms 后立即恢复固定目标。adaptive 的发送目标地板为 75%（192 Mbps）。该预设还保留 250ms 最小在途窗口，并把 TCP 默认/最大收发缓冲设为 256KB/16MB。`tcp_notsent_lowat=128KB` 会尽早向应用施加写入背压，降低大量慢连接积压未发送数据造成的内存压力。ECN 拥塞标记或 TCP 进入 Loss 状态仍会立即触发保护。
+
+3.6.3 的内存配置为：
+
+```text
+net.ipv4.tcp_wmem=8192 262144 16777216
+net.ipv4.tcp_rmem=8192 262144 16777216
+net.core.wmem_max=16777216
+net.core.rmem_max=16777216
+net.ipv4.tcp_notsent_lowat=131072
+```
+
+`tcp_notsent_lowat` 不是单连接总内存硬上限；已经发送但尚未确认的数据、重传队列和内核元数据仍由 TCP 发送缓存容纳。已有大队列不会因为套用预设立即缩小，需等待排空或连接重建。
 
 ### 国内混合终端速度优先版
 
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v362.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v363.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
@@ -54,7 +66,7 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v362.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v363.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
@@ -68,7 +80,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.2-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.3-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules

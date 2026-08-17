@@ -1,4 +1,4 @@
-# LotSpeed 3.6.2 Enhanced
+# LotSpeed 3.6.3 Enhanced
 
 This branch is a speed-first performance update on top of `main`.
 
@@ -56,7 +56,8 @@ goodput above the physical bottleneck after loss and protocol overhead.
 
 ## Long-lived TCP Mux profile
 
-For a small number of high-BDP Nyanpass-style tunnel sockets:
+For Nyanpass-style tunnel sockets, especially when the server also has many
+user TCP connections:
 
 ```bash
 lotspeed preset mux-throughput
@@ -69,8 +70,11 @@ must persist for 20 packet-timed rounds. The recovery threshold is 25%, RTT
 confirmation decays rapidly after the path clears, and AVOIDING lasts at least
 250ms. ECN or a TCP Loss state still enters AVOIDING immediately.
 The profile also reserves at least 250ms of target-rate flight data (about 8MB
-or 5479 packets at MSS 1460) and persists 32MB initial and 64MB maximum TCP
-send/receive buffers.
+or 5479 packets at MSS 1460). TCP send and receive buffers now start from a
+256KB default and autotune up to 16MB. A 128KB `tcp_notsent_lowat` applies
+early application backpressure so many slow sockets cannot each enqueue a
+multi-megabyte unsent backlog. This threshold does not cap sent-but-unacked
+flight data, retransmissions, or total socket memory.
 
 ## What changed
 
@@ -85,6 +89,8 @@ send/receive buffers.
 9. Add an optional minimum flight-time window for long-lived Mux tunnels.
 10. Add congestion-only adaptive control with a configurable fast exit hold.
 11. Retain the corrected byte accounting and Linux 6.10+ compatibility.
+12. Bound per-socket TCP buffers at 16MB and unsent application backlog at an
+    approximate 128KB threshold for high connection counts.
 
 ## Deliberately not merged
 
