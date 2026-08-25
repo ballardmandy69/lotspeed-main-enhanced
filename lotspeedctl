@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.6.3 enhanced management utility
+# LotSpeed v3.6.4 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.6.3-enhanced"
+VERSION="3.6.4-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -80,9 +80,10 @@ configure_mux_buffers() {
 # LotSpeed throughput profile: bounded per-socket memory for many TCP clients.
 net.core.rmem_max=16777216
 net.core.wmem_max=16777216
-net.ipv4.tcp_rmem=8192 262144 16777216
-net.ipv4.tcp_wmem=8192 262144 16777216
-net.ipv4.tcp_notsent_lowat=131072
+net.ipv4.tcp_rmem=8192 524288 16777216
+net.ipv4.tcp_wmem=8192 524288 16777216
+net.ipv4.tcp_notsent_lowat=262144
+net.ipv4.tcp_limit_output_bytes=1048576
 net.ipv4.tcp_moderate_rcvbuf=1
 net.ipv4.tcp_window_scaling=1
 EOF
@@ -324,6 +325,8 @@ show_status() {
         "$(sysctl -n net.ipv4.tcp_wmem 2>/dev/null || echo unknown)"
     printf 'tcp_notsent_lowat: %s\n' \
         "$(sysctl -n net.ipv4.tcp_notsent_lowat 2>/dev/null || echo unknown)"
+    printf 'tcp_limit_output_bytes: %s\n' \
+        "$(sysctl -n net.ipv4.tcp_limit_output_bytes 2>/dev/null || echo unknown)"
 
     [[ -d "${PARAM_DIR}" ]] || return
     printf '\nParameters:\n'

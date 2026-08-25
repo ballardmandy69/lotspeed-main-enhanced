@@ -1,4 +1,4 @@
-# LotSpeed 3.6.3 Enhanced
+# LotSpeed 3.6.4 Enhanced
 
 This branch is a speed-first performance update on top of `main`.
 
@@ -71,10 +71,11 @@ confirmation decays rapidly after the path clears, and AVOIDING lasts at least
 250ms. ECN or a TCP Loss state still enters AVOIDING immediately.
 The profile also reserves at least 250ms of target-rate flight data (about 8MB
 or 5479 packets at MSS 1460). TCP send and receive buffers now start from a
-256KB default and autotune up to 16MB. A 128KB `tcp_notsent_lowat` applies
-early application backpressure so many slow sockets cannot each enqueue a
-multi-megabyte unsent backlog. This threshold does not cap sent-but-unacked
-flight data, retransmissions, or total socket memory.
+512KB default and autotune up to 16MB. A 256KB `tcp_notsent_lowat` applies
+application backpressure while retaining write batching, and a 1MB
+`tcp_limit_output_bytes` cap bounds each socket's local qdisc/device backlog.
+These thresholds do not cap sent-but-unacked flight data, retransmissions, or
+total socket memory.
 
 ## What changed
 
@@ -89,8 +90,8 @@ flight data, retransmissions, or total socket memory.
 9. Add an optional minimum flight-time window for long-lived Mux tunnels.
 10. Add congestion-only adaptive control with a configurable fast exit hold.
 11. Retain the corrected byte accounting and Linux 6.10+ compatibility.
-12. Bound per-socket TCP buffers at 16MB and unsent application backlog at an
-    approximate 128KB threshold for high connection counts.
+12. Bound per-socket TCP buffers at 16MB, use a 256KB unsent-data threshold,
+    and cap local TCP output backlog at 1MB per socket.
 
 ## Deliberately not merged
 
