@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.6.4 enhanced management utility
+# LotSpeed v3.6.5 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.6.4-enhanced"
+VERSION="3.6.5-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -235,6 +235,8 @@ apply_preset() {
             write_param lotserver_max_cwnd 6000
             write_param lotserver_adaptive 0
             set_common_safety
+            write_param lotserver_hd_enable 0
+            write_param lotserver_noncong_beta 900
             ;;
         conservative)
             write_param lotserver_rate 125000000

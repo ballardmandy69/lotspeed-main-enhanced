@@ -4,19 +4,19 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.6.4 Mux 队列与内存平衡版
+### v3.6.5 固定256Mbps与坏线路丢包平衡版
 
 针对 Nyanpass 等长生命周期 TCP Mux 隧道，以及用户连接数较多的服务器：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v364.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
 lotspeed preset mux-throughput
 lotspeed status
 ```
 
-`mux-throughput` 平时固定保持 256 Mbps 目标和 105% pacing，只有确认严重拥塞时才启用 adaptive。进入门槛放宽为约 30% 丢包，或 RTT 明显膨胀并伴随至少约 25% 丢包持续 20 个 RTT 轮次；拥塞分类解除且至少经过 250ms 后立即恢复固定目标。adaptive 的发送目标地板为 75%（192 Mbps）。该预设还保留 250ms 最小在途窗口，把 TCP 默认/最大收发缓冲设为 512KB/16MB。`tcp_notsent_lowat=256KB` 向应用施加适度写入背压，`tcp_limit_output_bytes=1MB` 限制每个 TCP socket 进入 qdisc/设备层的本地积压。ECN 拥塞标记或 TCP 进入 Loss 状态仍会立即触发保护。
+`mux-throughput` 保持 3.6.4 的队列和内存配置；`wan-enhanced` 用于接近原版 main 的固定256Mbps手感。它保持 `adaptive=0` 、`gain=30` 、`beta=820` 、`cwnd=32..6000`，但关闭高延迟增益并将可能的随机丢包退避设为 `noncong_beta=900`。这使坏线路丢包后适度收缩，同时避免高延迟用户被额外扩大 CWND。
 
-3.6.4 的队列与内存配置为：
+3.6.5 继续使用 3.6.4 的队列与内存配置：
 
 ```text
 net.ipv4.tcp_wmem=8192 524288 16777216
@@ -34,7 +34,7 @@ net.ipv4.tcp_limit_output_bytes=1048576
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v364.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
@@ -67,11 +67,11 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v364.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
-`wan-enhanced` 固化了已验证的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，并启用高延迟补偿和随机丢包保护。
+`wan-enhanced` 固化了接近原版 main 的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，关闭高延迟补偿，并将可能的随机丢包退避设为 `noncong_beta=900`。
 
 普通非 CN2 电信 163 回国方向建议：
 
@@ -81,7 +81,7 @@ lotspeed preset ct-163-return
 
 该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.4-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.5-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules
