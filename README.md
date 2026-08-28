@@ -4,19 +4,19 @@
     <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
 </div>
 
-### v3.6.5 固定256Mbps与坏线路丢包平衡版
+### v3.7 好线路250Mbps与弱网50-100Mbps分流版
 
 针对 Nyanpass 等长生命周期 TCP Mux 隧道，以及用户连接数较多的服务器：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
-lotspeed preset mux-throughput
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v370.sh | sudo bash
+lotspeed preset wan-enhanced
 lotspeed status
 ```
 
-`mux-throughput` 保持 3.6.4 的队列和内存配置；`wan-enhanced` 用于接近原版 main 的固定256Mbps手感。它保持 `adaptive=0` 、`gain=30` 、`beta=820` 、`cwnd=32..6000`，但关闭高延迟增益并将可能的随机丢包退避设为 `noncong_beta=900`。这使坏线路丢包后适度收缩，同时避免高延迟用户被额外扩大 CWND。
+`wan-enhanced` 按每条 TCP 连接独立判断路径：正常连接上限为 250 Mbps；确认持续拥塞的连接进入 50-100 Mbps 弱网档，使用 2.0 倍 CWND 增益并取消额外飞行窗口，降低突发、重传和 PPS。单次随机丢包不会直接进入弱网档，恢复后连接会回到正常上限。`lotserver_noncong_beta=900` 和关闭高延迟补偿仍然保留。
 
-3.6.5 继续使用 3.6.4 的队列与内存配置：
+3.7 继续使用 3.6.4 的队列与内存配置（由 `mux-throughput` 写入）：
 
 ```text
 net.ipv4.tcp_wmem=8192 524288 16777216
@@ -34,12 +34,12 @@ net.ipv4.tcp_limit_output_bytes=1048576
 海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v370.sh | sudo bash
 lotspeed preset domestic-mixed
 lotspeed status
 ```
 
-`domestic-mixed` 保留每连接 256 Mbps 上限，默认 `gain=30`、拥塞保留约 85%，发送目标下限固定为上限的 60%（当前配置为 153.6 Mbps），`max_cwnd=10000`。每条 TCP 连接按 RTT 轮次独立更新交付率和丢包，忽略会拉低带宽估计的 app-limited 样本，并对 WiFi、移动网络常见的 ACK 聚合补充窗口。拥塞判定仍要求约 20% 丢包，或连续 12 个 RTT 轮次出现明显排队并伴随至少约 8% 丢包；单纯高延迟或大 Jitter 不会压低速度底线。
+`domestic-mixed` 同样使用每连接 250 Mbps 上限和 50-100 Mbps 弱网档，默认 `gain=30`、`max_cwnd=10000`。每条 TCP 连接按 RTT 轮次独立更新交付率和丢包，忽略会拉低带宽估计的 app-limited 样本，并对 WiFi、移动网络常见的 ACK 聚合补充窗口。拥塞判定仍要求约 20% 丢包，或连续 8 个 RTT 轮次出现明显排队并伴随至少约 8% 丢包；单纯高延迟或大 Jitter 不会压低速度。
 
 ### main-enhanced
 
@@ -67,11 +67,11 @@ lotspeed status
 分支推送后可直接安装：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v365.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v370.sh | sudo bash
 lotspeed preset domestic-mixed
 ```
 
-`wan-enhanced` 固化了接近原版 main 的 256Mbps 配置：`rate=32000000`、`gain=30`、`beta=820`、`cwnd=32..6000`、`adaptive=0`，关闭高延迟补偿，并将可能的随机丢包退避设为 `noncong_beta=900`。
+`wan-enhanced` 是本版本面向国内混合终端的主预设：`rate=31250000`（250 Mbps）、`gain=30`、`beta=820`、`cwnd=32..10000`、`adaptive=1`。健康流维持 250 Mbps 上限；确认拥塞的流使用 `degraded_rate_min=6250000`（50 Mbps）到 `degraded_rate_max=12500000`（100 Mbps），`degraded_gain=20`，并关闭高延迟补偿。
 
 普通非 CN2 电信 163 回国方向建议：
 
@@ -79,9 +79,9 @@ lotspeed preset domestic-mixed
 lotspeed preset ct-163-return
 ```
 
-该预设将 `32000000` 作为每连接上限而非固定发送目标，启用 adaptive，pacing 保留5%余量，并对所有丢包进行拥塞退让。
+该预设将 `31250000` 作为每连接上限而非固定发送目标，启用 adaptive，并对所有丢包进行拥塞退让。
 
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.6.5-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
+如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.7-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
 
 ```text
 make -C /lib/modules/.../build M=/opt/lotspeed modules
@@ -139,12 +139,16 @@ dmesg -w
 
 | 参数名称 (`sysctl`/`module`)           | 作用说明 (Description)                                        | 单位/换算 (Unit) | 默认值 | 推荐范围 (Ratio/Range) | 调整建议 |
 |:-----------------------------------|:----------------------------------------------------------| :--- | :--- | :--- | :--- |
-| **`lotserver_rate`**               | **每连接目标速率上限**<br>该参数全局配置，但分别应用到每条 TCP 连接，不是服务器总带宽整形器。             | **Bytes/sec**<br>256Mbps = 32,000,000 | 125000000<br>(1Gbps) | 按单连接目标设置 | 多连接总发送量可以超过该值；服务器总出口限制应交给 qdisc 或外部整形。 |
+| **`lotserver_rate`**               | **每连接目标速率上限**<br>该参数全局配置，但分别应用到每条 TCP 连接，不是服务器总带宽整形器。             | **Bytes/sec**<br>250Mbps = 31,250,000 | 125000000<br>(1Gbps) | 按单连接目标设置 | 多连接总发送量可以超过该值；服务器总出口限制应交给 qdisc 或外部整形。 |
 | **`lotserver_start_rate`**         | **zeta-tcp版本独有，软启动初始速率**<br>新连接建立时的起步速度。保护小带宽客户端不被瞬间流量淹没。 | **Bytes/sec**<br>10Mbps ≈ 1,250,000 | 6250000<br>(50Mbps) | **物理带宽的 30% - 50%** | 对于 100M 口，建议设为 `5000000` (40Mbps) 到 `7500000` (60Mbps)。设太高会导致起步丢包，设太低起步慢。 |
 | **`lotserver_gain`**               | **拥塞窗口增益 (Pacing Gain)**<br>倍率因子。决定算法有多“激进”地去抢占带宽。        | **数值 / 10**<br>30 = 3.0倍 | 30 | **15 (1.5倍) - 30 (3.0倍)** | 当前国内混合终端配置默认使用 `30`，优先维持足够在途数据。 |
 | **`lotserver_beta`**               | **丢包退让比例 (Fairness)**<br>当发生严重拥塞必须降速时，保留多少窗口。             | **数值 / 1024**<br>871 ≈ 保留85% | 871 | **614 (60%) - 921 (90%)** | 当前默认 `871`，发生拥塞时保留约 85.06% 的窗口。 |
 | **`lotserver_min_cwnd`**           | **最小拥塞窗口**<br>无论网络多差，窗口绝不低于此值。                            | **Packets (包数)** | 16 | **4 - 64** | 16 是安全值。设为 `32` 或 `64` 可以提高起步速度，但在拥塞时可能加剧丢包。 |
 | **`lotserver_max_cwnd`**           | **最大拥塞窗口**<br>窗口的绝对物理上限，防止 Bufferbloat。                   | **Packets (包数)** | 10000 | **5000 - 30000** | 国内混合预设使用 `10000`，给 300-400ms 路径保留足够在途数据。<br>更高值会增加每连接内存和排队压力。 |
+| **`lotserver_degraded_enable`**    | **弱网档开关**<br>仅对确认拥塞的单条 TCP 连接启用弱网目标。                   | **0 / 1** | 0 | **建议 1** | 健康连接仍使用 `lotserver_rate`；不是按 IP 限速。 |
+| **`lotserver_degraded_rate_min`**  | **弱网档最低目标**<br>确认拥塞连接的发送目标地板。                            | **Bytes/sec**<br>50Mbps = 6,250,000 | 6250000 | 按目标设置 | 这是发送目标，不是低于物理容量时的速度保证。 |
+| **`lotserver_degraded_rate_max`**  | **弱网档最高目标**<br>确认拥塞连接的发送目标上限。                            | **Bytes/sec**<br>100Mbps = 12,500,000 | 12500000 | 按目标设置 | 用于减少弱网连接的突发、重传和 PPS。 |
+| **`lotserver_degraded_gain`**      | **弱网档 CWND 增益**<br>确认拥塞连接使用的窗口增益。                         | **数值 / 10**<br>20 = 2.0倍 | 20 | **15 - 20** | 比健康流的 `gain=30` 更克制，避免继续填满队列。 |
 | **`lotserver_turbo`**              | **暴力模式 (Turbo)**<br>是否无视所有丢包信号。                           | **0 (关) / 1 (开)** | 0 | **建议 0** | 除非你在进行压力测试，否则不要开。开启后容易被运营商直接断流。 |
 | **`lotserver_safe_mode`**          | **zeta-tcp版本独有，安全熔断 (Safe Mode)**<br>是否在丢包率 >15% 时强制介入降速。              | **0 (关) / 1 (开)** | 1 | **建议 1** | 建议始终开启。这是防止 SSH 断连的最后一道防线。 |
 

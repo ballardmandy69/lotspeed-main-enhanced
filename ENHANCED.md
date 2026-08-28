@@ -1,34 +1,34 @@
-# LotSpeed 3.6.5 Enhanced
+# LotSpeed 3.7 Enhanced
 
 This branch is a speed-first performance update on top of `main`.
 
 ## Recommended profile
 
 ```bash
-sudo bash install.sh
-lotspeed preset domestic-mixed
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v370.sh | sudo bash
+lotspeed preset wan-enhanced
 lotspeed status
 ```
 
-The recommended preset keeps the 256 Mbps ceiling while adapting each TCP
-connection independently for mixed fixed-line, WiFi, mobile and campus users:
+The recommended preset gives healthy TCP connections a 250 Mbps ceiling while
+putting confirmed congested connections into a 50-100 Mbps degraded range:
 
 | Parameter | Value |
 | --- | ---: |
-| `lotserver_rate` | `32000000` bytes/s |
+| `lotserver_rate` | `31250000` bytes/s (250 Mbps) |
 | `lotserver_gain` | `30` |
 | `lotserver_beta` | `871` |
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `10000` packets |
 | `lotserver_adaptive` | `1` |
 | `lotserver_congestion_only` | `0` |
-| `lotserver_pacing_gain` | `105` percent |
-| `lotserver_min_rate_pct` | `60` percent |
+| `lotserver_pacing_gain` | `100` percent |
+| `lotserver_min_rate_pct` | `20` percent (50 Mbps at this ceiling) |
 | `lotserver_min_flight_ms` | `0` (disabled) |
-| `lotserver_avoid_hold_ms` | `500` milliseconds |
+| `lotserver_avoid_hold_ms` | `1000` milliseconds |
 | `lotserver_loss_congest_pct` | `20` percent |
 | `lotserver_loss_recover_pct` | `8` percent |
-| `lotserver_rtt_confirm_samples` | `12` |
+| `lotserver_rtt_confirm_samples` | `8` |
 | `lotserver_rtt_tolerance_pct` | `60` percent |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
@@ -38,6 +38,10 @@ connection independently for mixed fixed-line, WiFi, mobile and campus users:
 | `lotserver_probe_rtt_interval_ms` | `60000` |
 | `lotserver_probe_rtt_duration_ms` | `100` |
 | `lotserver_probe_rtt_cwnd_pct` | `50` percent |
+| `lotserver_degraded_enable` | `1` |
+| `lotserver_degraded_rate_min` | `6250000` bytes/s (50 Mbps) |
+| `lotserver_degraded_rate_max` | `12500000` bytes/s (100 Mbps) |
+| `lotserver_degraded_gain` | `20` (2.0x) |
 
 The installer also persists:
 
@@ -50,9 +54,10 @@ net.core.default_qdisc=fq
 Preset and individual `lotspeed set` changes are saved in
 `/etc/modprobe.d/lotspeed.conf`, so they survive a module reload or reboot.
 
-The 60% value is a sender-side target floor. It prevents the controller from
-voluntarily backing off below 153.6 Mbps, but no TCP algorithm can guarantee
-goodput above the physical bottleneck after loss and protocol overhead.
+The 20% value is the normal adaptive floor at this 250 Mbps ceiling. During
+confirmed congestion, the separate degraded range targets 50-100 Mbps per
+TCP flow. These are sender-side targets, not a guarantee that a path with a
+smaller physical capacity can deliver 50 Mbps without loss.
 
 ## Long-lived TCP Mux profile
 
@@ -63,12 +68,13 @@ user TCP connections:
 lotspeed preset mux-throughput
 ```
 
-This profile holds the target at 256 Mbps outside confirmed congestion and
-keeps 105% pacing. Adaptive control runs only in AVOIDING, with a 75% (192 Mbps)
-floor, a relaxed 30% pure-loss trigger, and an RTT-plus-25%-loss trigger that
-must persist for 20 packet-timed rounds. The recovery threshold is 25%, RTT
-confirmation decays rapidly after the path clears, and AVOIDING lasts at least
-250ms. ECN or a TCP Loss state still enters AVOIDING immediately.
+This profile holds the target at 250 Mbps outside confirmed congestion and
+uses 100% pacing. Adaptive control runs only in AVOIDING, with the same
+50-100 Mbps degraded range, a relaxed 30% pure-loss trigger, and an
+RTT-plus-25%-loss trigger that must persist for 8 packet-timed rounds. The
+recovery threshold is 25%, RTT confirmation decays rapidly after the path
+clears, and AVOIDING lasts at least 1 second. ECN or a TCP Loss state still
+enters AVOIDING immediately.
 The profile also reserves at least 250ms of target-rate flight data (about 8MB
 or 5479 packets at MSS 1460). TCP send and receive buffers now start from a
 512KB default and autotune up to 16MB. A 256KB `tcp_notsent_lowat` applies
@@ -83,7 +89,8 @@ total socket memory.
 2. Ignore app-limited samples when they would lower the bandwidth estimate.
 3. Compensate CWND for ACK aggregation common on WiFi and mobile access.
 4. Calculate BDP from minimum RTT plus bounded jitter, not queued RTT.
-5. Keep the adaptive send target at or above 60% of the configured ceiling.
+5. Keep healthy-flow targets at the configured ceiling while using a separate
+   50-100 Mbps range for confirmed congested flows.
 6. Keep ProbeRTT at or above one BDP of the speed floor.
 7. Require 20% loss, or sustained RTT inflation plus 8% loss, before congestion.
 8. Prefer the `fq` qdisc while retaining TCP internal pacing as a fallback.
@@ -92,6 +99,8 @@ total socket memory.
 11. Retain the corrected byte accounting and Linux 6.10+ compatibility.
 12. Bound per-socket TCP buffers at 16MB, use a 256KB unsent-data threshold,
     and cap local TCP output backlog at 1MB per socket.
+13. Cap confirmed congested flows per connection at 100 Mbps and use a 50 Mbps
+    target floor, with 2.0x CWND gain and no extra minimum-flight window.
 
 ## Deliberately not merged
 
@@ -122,7 +131,7 @@ For overseas servers sending to China Telecom over ordinary non-CN2 routes:
 lotspeed preset ct-163-return
 ```
 
-This uses adaptive rate control with a 256 Mbps per-connection ceiling,
-95% pacing, 2.0x CWND gain, 75% congestion retention, and treats every loss
-as a congestion signal. High-delay gain compensation is disabled because
-ordinary 163 congestion is usually made worse by filling a larger queue.
+This uses adaptive rate control with a 250 Mbps per-connection ceiling,
+100% pacing, and the 50-100 Mbps degraded range. High-delay gain compensation
+is disabled because ordinary 163 congestion is usually made worse by filling
+a larger queue.

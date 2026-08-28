@@ -1,4 +1,4 @@
-// lotspeed.c - v3.6.5 speed-first domestic mixed-access edition
+// lotspeed.c - v3.7 speed-first domestic mixed-access edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -72,6 +72,10 @@ static unsigned int lotserver_noncong_beta = 972;      // 95% cwnd on likely ran
 static bool lotserver_hd_enable = true;
 static unsigned int lotserver_hd_thresh_us = 120000;
 static unsigned int lotserver_hd_gain_boost = 20;
+static bool lotserver_degraded_enable = false;
+static unsigned long lotserver_degraded_rate_min = 6250000ULL; // 50Mbps
+static unsigned long lotserver_degraded_rate_max = 12500000ULL; // 100Mbps
+static unsigned int lotserver_degraded_gain = 20; // 2.0x cwnd gain
 
 // --- 参数回调 (保留v2.1的详细日志格式) ---
 static int param_set_rate(const char *val, const struct kernel_param *kp)
@@ -188,6 +192,26 @@ static int param_set_beta(const char *val, const struct kernel_param *kp)
     return ret;
 }
 
+static int param_set_degraded_rate(const char *val,
+                                   const struct kernel_param *kp)
+{
+    unsigned long *value = kp->arg;
+    int ret = param_set_ulong(val, kp);
+
+    if (!ret) {
+        *value = clamp_t(unsigned long, *value, 125000,
+                         LOTSPEED_MAX_RATE);
+        if (kp->arg == &lotserver_degraded_rate_min &&
+            lotserver_degraded_rate_max < lotserver_degraded_rate_min)
+            lotserver_degraded_rate_max = lotserver_degraded_rate_min;
+        else if (kp->arg == &lotserver_degraded_rate_max &&
+                 lotserver_degraded_rate_min > lotserver_degraded_rate_max)
+            lotserver_degraded_rate_min = lotserver_degraded_rate_max;
+    }
+
+    return ret;
+}
+
 static int param_set_percent(const char *val, const struct kernel_param *kp)
 {
     int ret = param_set_uint(val, kp);
@@ -205,7 +229,7 @@ static int param_set_floor_percent(const char *val,
     unsigned int *value = kp->arg;
 
     if (!ret)
-        *value = clamp_t(unsigned int, *value, 50, 100);
+        *value = clamp_t(unsigned int, *value, 1, 100);
     return ret;
 }
 
@@ -301,6 +325,7 @@ static int param_set_seconds(const char *val, const struct kernel_param *kp)
 }
 
 static const struct kernel_param_ops param_ops_rate = { .set = param_set_rate, .get = param_get_ulong, };
+static const struct kernel_param_ops param_ops_degraded_rate = { .set = param_set_degraded_rate, .get = param_get_ulong, };
 static const struct kernel_param_ops param_ops_gain = { .set = param_set_gain, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_min_cwnd = { .set = param_set_min_cwnd, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_max_cwnd = { .set = param_set_max_cwnd, .get = param_get_uint, };
@@ -396,6 +421,20 @@ MODULE_PARM_DESC(lotserver_hd_thresh_us, "High-delay path threshold in microseco
 
 module_param_cb(lotserver_hd_gain_boost, &param_ops_percent, &lotserver_hd_gain_boost, 0644);
 MODULE_PARM_DESC(lotserver_hd_gain_boost, "High-delay cwnd gain boost percent");
+
+module_param(lotserver_degraded_enable, bool, 0644);
+MODULE_PARM_DESC(lotserver_degraded_enable, "Limit confirmed congested flows to the degraded rate range");
+
+module_param_cb(lotserver_degraded_rate_min, &param_ops_degraded_rate,
+               &lotserver_degraded_rate_min, 0644);
+MODULE_PARM_DESC(lotserver_degraded_rate_min, "Minimum target rate for confirmed congested flows in bytes/sec");
+
+module_param_cb(lotserver_degraded_rate_max, &param_ops_degraded_rate,
+               &lotserver_degraded_rate_max, 0644);
+MODULE_PARM_DESC(lotserver_degraded_rate_max, "Maximum target rate for confirmed congested flows in bytes/sec");
+
+module_param_cb(lotserver_degraded_gain, &param_ops_gain, &lotserver_degraded_gain, 0644);
+MODULE_PARM_DESC(lotserver_degraded_gain, "CWND gain for confirmed congested flows (x10)");
 
 // --- 统计信息 (整合v2.1的详细统计) ---
 static atomic_t active_connections = ATOMIC_INIT(0);
@@ -728,6 +767,21 @@ static u64 lotspeed_adaptive_floor(const struct lotspeed *ca)
     return min_t(u64, floor, lotserver_rate);
 }
 
+/* Keep a confirmed congested flow useful while removing its large bursts. */
+static u64 lotspeed_degraded_target(const struct lotspeed *ca)
+{
+    u64 floor = min_t(u64, lotserver_degraded_rate_min, lotserver_rate);
+    u64 ceiling = min_t(u64, lotserver_degraded_rate_max, lotserver_rate);
+    u64 target;
+
+    if (ceiling < floor)
+        floor = ceiling;
+
+    target = ca->actual_rate ?
+             lotspeed_scale_percent(ca->actual_rate, 105) : ceiling;
+    return clamp_t(u64, target, floor, ceiling);
+}
+
 static u32 lotspeed_cruise_headroom(const struct lotspeed *ca)
 {
     switch (ca->path_mode) {
@@ -827,6 +881,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     bool continuous_adaptive;
     bool rtt_inflated;
     bool high_delay_path;
+    bool degraded_path;
 
     if (rs && rs->rtt_us > 0) {
         rtt_us = (u32)min_t(unsigned long, rs->rtt_us,
@@ -848,6 +903,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     adaptive_floor = lotspeed_adaptive_floor(ca);
     continuous_adaptive = lotserver_adaptive &&
                           !lotserver_congestion_only;
+    degraded_path = lotserver_adaptive && lotserver_degraded_enable &&
+                     ca->path_mode == PATH_CONGESTED;
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
@@ -972,8 +1029,13 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     if (!lotserver_adaptive ||
         (lotserver_congestion_only && ca->state != AVOIDING))
         ca->target_rate = lotserver_rate;
+    if (degraded_path &&
+        (!lotserver_congestion_only || ca->state == AVOIDING))
+        ca->target_rate = lotspeed_degraded_target(ca);
 
     effective_gain = lotserver_gain;
+    if (degraded_path)
+        effective_gain = min_t(u32, effective_gain, lotserver_degraded_gain);
     if (high_delay_path)
         effective_gain = min_t(u32, LOTSPEED_MAX_GAIN,
                                effective_gain +
@@ -995,7 +1057,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             ca->cwnd_gain = effective_gain;
             break;
         case AVOIDING:
-            ca->cwnd_gain = max_t(u32, effective_gain * 98 / 100, 10);
+            ca->cwnd_gain = degraded_path ? max_t(u32, effective_gain, 10) :
+                                            max_t(u32, effective_gain * 98 / 100, 10);
             break;
         case PROBE_RTT:
             ca->cwnd_gain = effective_gain;
@@ -1027,7 +1090,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             div64_u64((u64)target_cwnd * ca->cwnd_gain, 10),
             LOTSPEED_MAX_U32);
 
-        if (lotserver_min_flight_ms &&
+        if (lotserver_min_flight_ms && !degraded_path &&
             ca->target_rate <= div64_u64(LOTSPEED_MAX_U64,
                                          lotserver_min_flight_ms)) {
             u32 flight_floor = (u32)min_t(u64,
@@ -1054,8 +1117,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         u32 retained = (u32)div_u64((u64)ca->probe_prior_cwnd *
                                     min_t(u32, lotserver_probe_rtt_cwnd_pct, 100),
                                     100);
-        u64 probe_rate = continuous_adaptive ? adaptive_floor :
-                         ca->target_rate;
+        u64 probe_rate = degraded_path ? lotspeed_degraded_target(ca) :
+                         continuous_adaptive ? adaptive_floor : ca->target_rate;
         u32 probe_floor = 0;
 
         if (mss && ca->rtt_min &&
@@ -1284,7 +1347,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.6.5 - speed-first domestic access      ║\n");
+    pr_info("║      LotSpeed v3.7 - speed-first domestic access        ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1322,7 +1385,11 @@ static int __init lotspeed_module_init(void)
             lotserver_pacing_gain, lotserver_probe_rtt_interval_ms,
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
     pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
-            lotserver_min_rate_pct);
+             lotserver_min_rate_pct);
+    pr_info("  Degraded Flows: %s | Rate: %lu-%lu bytes/s | Gain: %u.%ux\n",
+             lotserver_degraded_enable ? "ON" : "OFF",
+             lotserver_degraded_rate_min, lotserver_degraded_rate_max,
+             lotserver_degraded_gain / 10, lotserver_degraded_gain % 10);
     pr_info("  Minimum Flight Window: %u ms\n",
             lotserver_min_flight_ms);
     pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
@@ -1355,7 +1422,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.6.5 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.7 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1371,6 +1438,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.6.5-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.6.5 - fixed-rate loss-guard profile");
+MODULE_VERSION("3.7-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.7 - per-flow degraded-rate loss guard");
 MODULE_ALIAS("tcp_lotspeed");
