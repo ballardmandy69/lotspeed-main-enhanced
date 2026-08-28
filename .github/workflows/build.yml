@@ -23,7 +23,7 @@ jobs:
           grep -q 'write_param lotserver_hd_enable 0' lotspeedctl
           grep -q 'write_param lotserver_noncong_beta 900' lotspeedctl
           grep -q 'write_param lotserver_congestion_only 1' lotspeedctl
-          grep -q 'write_param lotserver_min_rate_pct 75' lotspeedctl
+          grep -q 'write_param lotserver_min_rate_pct 20' lotspeedctl
           grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
           grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
           grep -q 'net.ipv4.tcp_rmem=8192 524288 16777216' lotspeedctl
