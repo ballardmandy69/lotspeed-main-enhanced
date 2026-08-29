@@ -734,13 +734,14 @@ static u64 lotspeed_tcp_tx_counter(const struct tcp_sock *tp)
 #endif
 }
 
-static u64 lotspeed_tcp_tx_delta(u64 current, u64 previous, u32 mss)
+static u64 lotspeed_tcp_tx_delta(u64 current_counter, u64 previous,
+                                  u32 mss)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
     (void)mss;
-    return current - previous;
+    return current_counter - previous;
 #else
-    return (u64)(u32)((u32)current - (u32)previous) * mss;
+    return (u64)(u32)((u32)current_counter - (u32)previous) * mss;
 #endif
 }
 
