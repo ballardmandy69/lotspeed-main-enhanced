@@ -11,19 +11,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.7-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.7-enhanced"' install.sh
-          grep -q 'VERSION="3.7-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.7.1-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.7.1-enhanced"' install.sh
+          grep -q 'VERSION="3.7.1-enhanced"' lotspeedctl
           grep -q 'write_param lotserver_rate 31250000' lotspeedctl
           grep -q 'write_param lotserver_degraded_enable 1' lotspeedctl
           grep -q 'write_param lotserver_degraded_rate_min 6250000' lotspeedctl
           grep -q 'write_param lotserver_degraded_rate_max 12500000' lotspeedctl
           grep -q 'write_param lotserver_degraded_gain 20' lotspeedctl
+          grep -q 'write_param lotserver_degraded_loss_pct 30' lotspeedctl
+          grep -q 'write_param lotserver_degraded_recover_pct 20' lotspeedctl
+          grep -q 'degraded_path = lotspeed_update_degraded_mode(ca);' lotspeed.c
+          grep -q 'ca->loss_ewma >= enter_loss' lotspeed.c
           grep -q 'write_param lotserver_hd_enable 0' lotspeedctl
           grep -q 'write_param lotserver_noncong_beta 900' lotspeedctl
           grep -q 'write_param lotserver_congestion_only 1' lotspeedctl
-          grep -q 'write_param lotserver_min_rate_pct 20' lotspeedctl
+          grep -q 'write_param lotserver_min_rate_pct 50' lotspeedctl
           grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
           grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
           grep -q 'net.ipv4.tcp_rmem=8192 524288 16777216' lotspeedctl

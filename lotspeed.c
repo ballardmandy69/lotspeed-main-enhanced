@@ -1,4 +1,4 @@
-// lotspeed.c - v3.7 speed-first domestic mixed-access edition
+// lotspeed.c - v3.7.1 severe-loss degraded-mode edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -76,6 +76,8 @@ static bool lotserver_degraded_enable = false;
 static unsigned long lotserver_degraded_rate_min = 6250000ULL; // 50Mbps
 static unsigned long lotserver_degraded_rate_max = 12500000ULL; // 100Mbps
 static unsigned int lotserver_degraded_gain = 20; // 2.0x cwnd gain
+static unsigned int lotserver_degraded_loss_pct = 30;
+static unsigned int lotserver_degraded_recover_pct = 20;
 
 // --- 参数回调 (保留v2.1的详细日志格式) ---
 static int param_set_rate(const char *val, const struct kernel_param *kp)
@@ -212,6 +214,28 @@ static int param_set_degraded_rate(const char *val,
     return ret;
 }
 
+static int param_set_degraded_loss(const char *val,
+                                   const struct kernel_param *kp)
+{
+    unsigned int *value = kp->arg;
+    int ret = param_set_uint(val, kp);
+
+    if (ret)
+        return ret;
+
+    if (kp->arg == &lotserver_degraded_loss_pct) {
+        *value = clamp_t(unsigned int, *value, 2, 100);
+        if (lotserver_degraded_recover_pct >= *value)
+            lotserver_degraded_recover_pct = *value - 1;
+    } else {
+        *value = min_t(unsigned int, *value, 99);
+        if (*value >= lotserver_degraded_loss_pct)
+            *value = lotserver_degraded_loss_pct - 1;
+    }
+
+    return 0;
+}
+
 static int param_set_percent(const char *val, const struct kernel_param *kp)
 {
     int ret = param_set_uint(val, kp);
@@ -326,6 +350,7 @@ static int param_set_seconds(const char *val, const struct kernel_param *kp)
 
 static const struct kernel_param_ops param_ops_rate = { .set = param_set_rate, .get = param_get_ulong, };
 static const struct kernel_param_ops param_ops_degraded_rate = { .set = param_set_degraded_rate, .get = param_get_ulong, };
+static const struct kernel_param_ops param_ops_degraded_loss = { .set = param_set_degraded_loss, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_gain = { .set = param_set_gain, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_min_cwnd = { .set = param_set_min_cwnd, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_max_cwnd = { .set = param_set_max_cwnd, .get = param_get_uint, };
@@ -423,18 +448,26 @@ module_param_cb(lotserver_hd_gain_boost, &param_ops_percent, &lotserver_hd_gain_
 MODULE_PARM_DESC(lotserver_hd_gain_boost, "High-delay cwnd gain boost percent");
 
 module_param(lotserver_degraded_enable, bool, 0644);
-MODULE_PARM_DESC(lotserver_degraded_enable, "Limit confirmed congested flows to the degraded rate range");
+MODULE_PARM_DESC(lotserver_degraded_enable, "Limit sustained severe-loss flows to the degraded rate range");
 
 module_param_cb(lotserver_degraded_rate_min, &param_ops_degraded_rate,
                &lotserver_degraded_rate_min, 0644);
-MODULE_PARM_DESC(lotserver_degraded_rate_min, "Minimum target rate for confirmed congested flows in bytes/sec");
+MODULE_PARM_DESC(lotserver_degraded_rate_min, "Minimum target rate for sustained severe-loss flows in bytes/sec");
 
 module_param_cb(lotserver_degraded_rate_max, &param_ops_degraded_rate,
                &lotserver_degraded_rate_max, 0644);
-MODULE_PARM_DESC(lotserver_degraded_rate_max, "Maximum target rate for confirmed congested flows in bytes/sec");
+MODULE_PARM_DESC(lotserver_degraded_rate_max, "Maximum target rate for sustained severe-loss flows in bytes/sec");
 
 module_param_cb(lotserver_degraded_gain, &param_ops_gain, &lotserver_degraded_gain, 0644);
-MODULE_PARM_DESC(lotserver_degraded_gain, "CWND gain for confirmed congested flows (x10)");
+MODULE_PARM_DESC(lotserver_degraded_gain, "CWND gain for sustained severe-loss flows (x10)");
+
+module_param_cb(lotserver_degraded_loss_pct, &param_ops_degraded_loss,
+                &lotserver_degraded_loss_pct, 0644);
+MODULE_PARM_DESC(lotserver_degraded_loss_pct, "Loss EWMA percent required to enter degraded mode");
+
+module_param_cb(lotserver_degraded_recover_pct, &param_ops_degraded_loss,
+                &lotserver_degraded_recover_pct, 0644);
+MODULE_PARM_DESC(lotserver_degraded_recover_pct, "Loss EWMA percent required to leave degraded mode");
 
 // --- 统计信息 (整合v2.1的详细统计) ---
 static atomic_t active_connections = ATOMIC_INIT(0);
@@ -487,7 +520,7 @@ struct lotspeed {
     u8 rtt_high_count;
     u8 path_mode;
     bool ss_mode;
-    u8 reserved;
+    bool degraded;
 };
 
 // 将状态转换为字符串，用于日志
@@ -767,7 +800,29 @@ static u64 lotspeed_adaptive_floor(const struct lotspeed *ca)
     return min_t(u64, floor, lotserver_rate);
 }
 
-/* Keep a confirmed congested flow useful while removing its large bursts. */
+static bool lotspeed_update_degraded_mode(struct lotspeed *ca)
+{
+    u32 enter_loss;
+    u32 recover_loss;
+
+    if (!lotserver_adaptive || !lotserver_degraded_enable ||
+        lotserver_turbo) {
+        ca->degraded = false;
+        return false;
+    }
+
+    enter_loss = lotserver_degraded_loss_pct * LOTSPEED_LOSS_SCALE / 100;
+    recover_loss = lotserver_degraded_recover_pct * LOTSPEED_LOSS_SCALE / 100;
+
+    if (!ca->degraded && ca->loss_ewma >= enter_loss)
+        ca->degraded = true;
+    else if (ca->degraded && ca->loss_ewma <= recover_loss)
+        ca->degraded = false;
+
+    return ca->degraded;
+}
+
+/* Keep a sustained severe-loss flow useful while removing its large bursts. */
 static u64 lotspeed_degraded_target(const struct lotspeed *ca)
 {
     u64 floor = min_t(u64, lotserver_degraded_rate_min, lotserver_rate);
@@ -903,8 +958,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     adaptive_floor = lotspeed_adaptive_floor(ca);
     continuous_adaptive = lotserver_adaptive &&
                           !lotserver_congestion_only;
-    degraded_path = lotserver_adaptive && lotserver_degraded_enable &&
-                     ca->path_mode == PATH_CONGESTED;
+    degraded_path = lotspeed_update_degraded_mode(ca);
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
@@ -1029,8 +1083,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     if (!lotserver_adaptive ||
         (lotserver_congestion_only && ca->state != AVOIDING))
         ca->target_rate = lotserver_rate;
-    if (degraded_path &&
-        (!lotserver_congestion_only || ca->state == AVOIDING))
+    if (degraded_path)
         ca->target_rate = lotspeed_degraded_target(ca);
 
     effective_gain = lotserver_gain;
@@ -1347,7 +1400,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.7 - speed-first domestic access        ║\n");
+    pr_info("║      LotSpeed v3.7.1 - severe-loss degraded mode       ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1390,6 +1443,9 @@ static int __init lotspeed_module_init(void)
              lotserver_degraded_enable ? "ON" : "OFF",
              lotserver_degraded_rate_min, lotserver_degraded_rate_max,
              lotserver_degraded_gain / 10, lotserver_degraded_gain % 10);
+    pr_info("  Degraded Loss: enter %u%% | recover %u%%\n",
+             lotserver_degraded_loss_pct,
+             lotserver_degraded_recover_pct);
     pr_info("  Minimum Flight Window: %u ms\n",
             lotserver_min_flight_ms);
     pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
@@ -1422,7 +1478,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.7 Unloaded                        ║\n");
+    pr_info("║          LotSpeed v3.7.1 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1438,6 +1494,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.7-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.7 - per-flow degraded-rate loss guard");
+MODULE_VERSION("3.7.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.7.1 - severe-loss-only degraded mode");
 MODULE_ALIAS("tcp_lotspeed");

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.7 enhanced installer
+# LotSpeed v3.7.1 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v370.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v371.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.7}"
+GITHUB_REF="${LOTSPEED_REF:-v3.7.1}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.7-enhanced"
+VERSION="3.7.1-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -132,6 +132,8 @@ validate_built_module() {
         lotserver_degraded_rate_min
         lotserver_degraded_rate_max
         lotserver_degraded_gain
+        lotserver_degraded_loss_pct
+        lotserver_degraded_recover_pct
     )
 
     built_version="$(modinfo -F version "${built_module}" 2>/dev/null || true)"
@@ -184,6 +186,8 @@ install_module() {
         lotserver_degraded_rate_min
         lotserver_degraded_rate_max
         lotserver_degraded_gain
+        lotserver_degraded_loss_pct
+        lotserver_degraded_recover_pct
     )
 
     if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then

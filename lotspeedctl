@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.7 enhanced management utility
+# LotSpeed v3.7.1 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.7-enhanced"
+VERSION="3.7.1-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -129,6 +129,8 @@ set_common_safety() {
     write_param lotserver_degraded_rate_min 6250000
     write_param lotserver_degraded_rate_max 12500000
     write_param lotserver_degraded_gain 20
+    write_param lotserver_degraded_loss_pct 30
+    write_param lotserver_degraded_recover_pct 20
 }
 
 apply_preset() {
@@ -163,6 +165,8 @@ apply_preset() {
         lotserver_degraded_rate_min
         lotserver_degraded_rate_max
         lotserver_degraded_gain
+        lotserver_degraded_loss_pct
+        lotserver_degraded_recover_pct
     )
 
     require_root
@@ -184,7 +188,7 @@ apply_preset() {
             write_param lotserver_degraded_rate_max 12500000
             write_param lotserver_degraded_gain 20
             write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 20
+            write_param lotserver_min_rate_pct 50
             write_param lotserver_rtt_tolerance_pct 60
             write_param lotserver_loss_congest_pct 20
             write_param lotserver_loss_recover_pct 8
@@ -213,7 +217,7 @@ apply_preset() {
             write_param lotserver_avoid_hold_ms 1000
             write_param lotserver_min_flight_ms 250
             write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 20
+            write_param lotserver_min_rate_pct 50
             write_param lotserver_rtt_tolerance_pct 80
             write_param lotserver_loss_congest_pct 30
             write_param lotserver_loss_recover_pct 25
@@ -253,8 +257,8 @@ apply_preset() {
             write_param lotserver_probe_rtt_duration_ms 100
             ;;
         wan-enhanced)
-            # Healthy flows can use 250 Mbps; confirmed congested flows use
-            # the built-in 50-100 Mbps degraded range.
+            # Healthy and moderate-congestion flows can use 250 Mbps; only
+            # sustained severe-loss flows use the 50-100 Mbps range.
             write_param lotserver_rate 31250000
             write_param lotserver_gain 30
             write_param lotserver_beta 820
@@ -267,7 +271,7 @@ apply_preset() {
             write_param lotserver_degraded_rate_max 12500000
             write_param lotserver_degraded_gain 20
             write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 20
+            write_param lotserver_min_rate_pct 50
             write_param lotserver_congestion_only 0
             write_param lotserver_avoid_hold_ms 1000
             write_param lotserver_loss_congest_pct 20
@@ -319,7 +323,7 @@ Available presets:
   domestic-mixed - Mixed China fixed, WiFi, mobile and campus clients
   mux-throughput - 250 Mbps congestion-gated profile with weak-flow cap
   ct-163-return - Overseas to China Telecom ordinary 163 route
-  wan-enhanced  - 250 Mbps healthy-flow ceiling, 50-100 Mbps weak-flow cap
+  wan-enhanced  - 250 Mbps ceiling, 125 Mbps floor; severe loss 50-100
   conservative  - 1 Gbps ceiling, adaptive, low queue pressure
   balanced      - 5 Gbps ceiling, adaptive
   aggressive    - 10 Gbps ceiling, adaptive
