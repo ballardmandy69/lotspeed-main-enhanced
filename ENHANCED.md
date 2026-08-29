@@ -1,13 +1,13 @@
-# LotSpeed 3.8 Enhanced
+# LotSpeed 3.8.1 Enhanced
 
-LotSpeed 3.8 returns healthy connections to the fixed-rate behavior of the
+LotSpeed 3.8.1 returns healthy connections to the fixed-rate behavior of the
 upstream `main` profile and adds one internal per-connection safeguard for
 long-lived TCP Mux traffic.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v380.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v381.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -26,7 +26,7 @@ The main profile is:
 | `lotserver_loss_guard` | `0` |
 | `lotserver_hd_enable` | `0` |
 
-In 3.8, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
+In 3.8.1, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
 Healthy flows retain the fixed `lotserver_rate`; they are not continuously
 adapted to measured bandwidth. Setting it to `0` disables the guard and gives
 the fixed upstream-main behavior.
@@ -53,9 +53,12 @@ The configured target is not a strict shaper. With `pacing_gain=120`, a
 
 ## Transition rules
 
-Downshifts require a complete 10-second active window. The connection must
-transmit at least 70% of its current target during that window. Receive-window
-limited samples are discarded.
+Normal downshifts require a complete 10-second active window. The connection
+must transmit at least 70% of its current target during that window.
+Receive-window-limited samples are discarded. A flow below 70% efficiency is
+fast-braked after a qualifying 2-second active sample: 50%-70% enters the 70%
+tier, while below 50% enters the 50% tier. The 70%-79% middle range still uses
+the complete 10-second window.
 
 Recovery is deliberately faster:
 
@@ -67,7 +70,7 @@ Recovery is deliberately faster:
 5. After 30 seconds without sustained payload, the next active period starts
    from the full tier with fresh counters.
 
-These constants are internal by design. Version 3.8 does not expose another
+These constants are internal by design. Version 3.8.1 does not expose another
 set of degraded-mode tuning parameters.
 
 ## Mux socket buffers

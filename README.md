@@ -1,16 +1,16 @@
-# LotSpeed 3.8 Enhanced
+# LotSpeed 3.8.1 Enhanced
 
 本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。正常连接恢复到经过验证的 upstream `main` 固定速率行为，只对持续发送效率很低的单条 MUX 降低目标速率上限。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v380.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v381.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
 
-`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8 中均为该主预设的兼容别名。
+`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8.1 中均为该主预设的兼容别名。
 
 ## 主配置
 
@@ -26,7 +26,7 @@ lotserver_loss_guard=0
 lotserver_hd_enable=0
 ```
 
-3.8 中 `lotserver_adaptive` 的语义已经收窄：
+3.8.1 中 `lotserver_adaptive` 的语义已经收窄：
 
 ```text
 adaptive=0：固定使用 lotserver_rate，不做低效率分档
@@ -45,7 +45,7 @@ RTT、Jitter 或单次丢包不会直接触发效率分档。
 发送效率 = 有效接收 / 实际发送
 ```
 
-只有持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的十秒窗口才参与降档判断。
+普通降档需要持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的完整十秒窗口。若效率低于70%，并且已经满足发送量条件，3.8.1 会在约两秒后进入受限档：效率在50%～70%时进入70%目标档，低于50%时进入50%目标档，以避免异常连接继续填充重传队列；70%～79%的中等效率仍按完整十秒窗口判断。
 
 | 连续十秒发送效率 | 每连接目标上限 | 256 Mbps 配置下 |
 | --- | ---: | ---: |
@@ -60,8 +60,9 @@ RTT、Jitter 或单次丢包不会直接触发效率分档。
 ## 降档与恢复
 
 ```text
-FULL -> LIMIT_70：连续十秒效率为50%～79%
-FULL -> LIMIT_50：连续十秒效率低于50%
+FULL -> LIMIT_70：连续十秒效率为50%～79%，或合格的两秒窗口效率为50%～70%
+FULL -> LIMIT_50：合格的两秒窗口效率低于50%（极端快速保护）
+FULL -> LIMIT_50：普通情况下连续十秒效率低于50%
 LIMIT_70 -> LIMIT_50：连续十秒效率低于50%
 ```
 

@@ -1,4 +1,4 @@
-// lotspeed.c - v3.8 main-compatible per-flow efficiency guard
+// lotspeed.c - v3.8.1 main-compatible per-flow efficiency guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -38,6 +38,7 @@
 #define LOTSPEED_LOSS_SCALE 1024
 #define LOTSPEED_ACK_EXTRA_MAX_US 100000
 #define LOTSPEED_GUARD_DOWN_MS 10000
+#define LOTSPEED_GUARD_SEVERE_DOWN_MS 2000
 #define LOTSPEED_GUARD_UP_MS 2000
 #define LOTSPEED_GUARD_COOLDOWN_MS 10000
 #define LOTSPEED_GUARD_IDLE_RESET_MS 30000
@@ -45,6 +46,7 @@
 #define LOTSPEED_GUARD_FULL_EFF_PCT 80
 #define LOTSPEED_GUARD_UP_EFF_PCT 85
 #define LOTSPEED_GUARD_MID_EFF_PCT 50
+#define LOTSPEED_GUARD_FAST_EFF_PCT 70
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -809,8 +811,7 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
         return;
     }
 
-    required_ms = ca->guard_tier == GUARD_FULL ?
-                  LOTSPEED_GUARD_DOWN_MS : LOTSPEED_GUARD_UP_MS;
+    required_ms = LOTSPEED_GUARD_UP_MS;
     elapsed_ms = jiffies_to_msecs(now - ca->guard_stamp);
     if (elapsed_ms < required_ms)
         return;
@@ -826,6 +827,10 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
 
     if (!tx_bytes || tx_bytes < active_floor ||
         lotspeed_rwnd_limited(tp, mss)) {
+        if (ca->guard_tier == GUARD_FULL &&
+            elapsed_ms < LOTSPEED_GUARD_DOWN_MS)
+            return;
+
         ca->guard_bad_windows = 0;
         if (ca->guard_tier == GUARD_PROBE_70 ||
             ca->guard_tier == GUARD_PROBE_FULL) {
@@ -844,6 +849,28 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
         div64_u64(acked_bytes * 100, tx_bytes), 100);
     tx_rate = div64_u64(tx_bytes * 1000, elapsed_ms);
     delivery_rate = div64_u64(acked_bytes * 1000, elapsed_ms);
+
+    /*
+     * A low-efficiency flow should stop filling the retransmission queue
+     * before the normal ten-second downgrade window completes. The 70%-80%
+     * range still follows the longer window below, so ordinary jitter near
+     * the healthy boundary is not penalized.
+     */
+    if (ca->guard_tier == GUARD_FULL) {
+        if (efficiency < LOTSPEED_GUARD_FAST_EFF_PCT &&
+            elapsed_ms >= LOTSPEED_GUARD_SEVERE_DOWN_MS) {
+            u8 fast_tier = efficiency < LOTSPEED_GUARD_MID_EFF_PCT ?
+                           GUARD_LIMIT_50 : GUARD_LIMIT_70;
+
+            lotspeed_guard_set_tier(sk, fast_tier, efficiency,
+                                    tx_rate, delivery_rate);
+            lotspeed_guard_reset_window(sk, now);
+            return;
+        }
+        if (elapsed_ms < LOTSPEED_GUARD_DOWN_MS)
+            return;
+    }
+
     cooldown = ca->guard_cooldown_until &&
                time_before32(now, ca->guard_cooldown_until);
 
@@ -982,7 +1009,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.8 core: original fixed-rate behavior plus a per-flow rate ceiling ---
+// --- v3.8.1 core: original fixed-rate behavior plus a per-flow rate ceiling ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1383,7 +1410,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.8 - per-flow efficiency guard         ║\n");
+    pr_info("║    LotSpeed v3.8.1 - per-flow efficiency guard         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1455,7 +1482,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.8 Unloaded                        ║\n");
+    pr_info("║        LotSpeed v3.8.1 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1471,6 +1498,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.8-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.8 - main-compatible per-flow efficiency guard");
+MODULE_VERSION("3.8.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.8.1 - main-compatible per-flow efficiency guard");
 MODULE_ALIAS("tcp_lotspeed");
