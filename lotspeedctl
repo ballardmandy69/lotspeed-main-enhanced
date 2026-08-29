@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.8.2 enhanced management utility
+# LotSpeed v3.8.3 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.8.2-enhanced"
+VERSION="3.8.3-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"

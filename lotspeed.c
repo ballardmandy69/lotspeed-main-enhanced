@@ -1,4 +1,4 @@
-// lotspeed.c - v3.8.2 main-compatible per-flow efficiency guard
+// lotspeed.c - v3.8.3 main-compatible per-flow efficiency guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -47,6 +47,7 @@
 #define LOTSPEED_GUARD_UP_EFF_PCT 85
 #define LOTSPEED_GUARD_MID_EFF_PCT 50
 #define LOTSPEED_GUARD_FAST_EFF_PCT 70
+#define LOTSPEED_GUARD_SEVERE_EFF_PCT 30
 #define LOTSPEED_GUARD_SEVERE_MIN_BYTES 262144
 #define LOTSPEED_GUARD_SEVERE_MIN_RETRANS 16
 
@@ -413,6 +414,8 @@ enum lotspeed_guard_tier {
     GUARD_FULL,
     GUARD_LIMIT_70,
     GUARD_LIMIT_50,
+    GUARD_LIMIT_30,
+    GUARD_PROBE_50,
     GUARD_PROBE_70,
     GUARD_PROBE_FULL
 };
@@ -709,6 +712,8 @@ static const char *guard_to_str(u8 tier)
         case GUARD_FULL: return "FULL";
         case GUARD_LIMIT_70: return "LIMIT_70";
         case GUARD_LIMIT_50: return "LIMIT_50";
+        case GUARD_LIMIT_30: return "LIMIT_30";
+        case GUARD_PROBE_50: return "PROBE_50";
         case GUARD_PROBE_70: return "PROBE_70";
         case GUARD_PROBE_FULL: return "PROBE_FULL";
         default: return "UNKNOWN";
@@ -722,12 +727,24 @@ static u64 lotspeed_guard_cap(const struct lotspeed *ca)
         case GUARD_PROBE_70:
             return lotspeed_scale_percent(lotserver_rate, 70);
         case GUARD_LIMIT_50:
+        case GUARD_PROBE_50:
             return lotspeed_scale_percent(lotserver_rate, 50);
+        case GUARD_LIMIT_30:
+            return lotspeed_scale_percent(lotserver_rate, 30);
         case GUARD_FULL:
         case GUARD_PROBE_FULL:
         default:
             return lotserver_rate;
     }
+}
+
+static u8 lotspeed_guard_tier_for_efficiency(u32 efficiency)
+{
+    if (efficiency < LOTSPEED_GUARD_SEVERE_EFF_PCT)
+        return GUARD_LIMIT_30;
+    if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT)
+        return GUARD_LIMIT_50;
+    return GUARD_LIMIT_70;
 }
 
 static u64 lotspeed_tcp_tx_counter(const struct tcp_sock *tp)
@@ -832,8 +849,7 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
     tx_rate = div64_u64(tx_bytes * 1000, elapsed_ms);
     delivery_rate = div64_u64(acked_bytes * 1000, elapsed_ms);
     retrans_segs = (u32)(tp->total_retrans - ca->guard_retrans_base);
-    severe_sample = ca->guard_tier == GUARD_FULL &&
-                    tx_bytes >= LOTSPEED_GUARD_SEVERE_MIN_BYTES &&
+    severe_sample = tx_bytes >= LOTSPEED_GUARD_SEVERE_MIN_BYTES &&
                     retrans_segs >= LOTSPEED_GUARD_SEVERE_MIN_RETRANS &&
                     efficiency < LOTSPEED_GUARD_FAST_EFF_PCT;
     active_floor = div64_u64(lotspeed_guard_cap(ca) * elapsed_ms,
@@ -851,9 +867,12 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
             return;
 
         ca->guard_bad_windows = 0;
-        if (ca->guard_tier == GUARD_PROBE_70 ||
+        if (ca->guard_tier == GUARD_PROBE_50 ||
+            ca->guard_tier == GUARD_PROBE_70 ||
             ca->guard_tier == GUARD_PROBE_FULL) {
-            u8 fallback = ca->guard_tier == GUARD_PROBE_70 ?
+            u8 fallback = ca->guard_tier == GUARD_PROBE_50 ?
+                          GUARD_LIMIT_30 :
+                          ca->guard_tier == GUARD_PROBE_70 ?
                           GUARD_LIMIT_50 : GUARD_LIMIT_70;
 
             ca->guard_cooldown_until = now +
@@ -875,8 +894,8 @@ evaluate_efficiency:
     if (ca->guard_tier == GUARD_FULL) {
         if (efficiency < LOTSPEED_GUARD_FAST_EFF_PCT &&
             elapsed_ms >= LOTSPEED_GUARD_SEVERE_DOWN_MS) {
-            u8 fast_tier = efficiency < LOTSPEED_GUARD_MID_EFF_PCT ?
-                           GUARD_LIMIT_50 : GUARD_LIMIT_70;
+            u8 fast_tier =
+                lotspeed_guard_tier_for_efficiency(efficiency);
 
             lotspeed_guard_set_tier(sk, fast_tier, efficiency,
                                     tx_rate, delivery_rate);
@@ -892,18 +911,18 @@ evaluate_efficiency:
 
     switch (ca->guard_tier) {
         case GUARD_FULL:
-            if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT)
-                lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
-                                        efficiency, tx_rate,
-                                        delivery_rate);
-            else if (efficiency < LOTSPEED_GUARD_FULL_EFF_PCT)
-                lotspeed_guard_set_tier(sk, GUARD_LIMIT_70,
-                                        efficiency, tx_rate,
-                                        delivery_rate);
+            if (efficiency < LOTSPEED_GUARD_FULL_EFF_PCT)
+                lotspeed_guard_set_tier(
+                    sk, lotspeed_guard_tier_for_efficiency(efficiency),
+                    efficiency, tx_rate, delivery_rate);
             break;
 
         case GUARD_LIMIT_70:
-            if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT) {
+            if (efficiency < LOTSPEED_GUARD_SEVERE_EFF_PCT) {
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_30,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            } else if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT) {
                 if (++ca->guard_bad_windows >=
                     LOTSPEED_GUARD_DOWN_MS / LOTSPEED_GUARD_UP_MS)
                     lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
@@ -920,20 +939,46 @@ evaluate_efficiency:
             break;
 
         case GUARD_LIMIT_50:
-            if (!cooldown &&
+            if (efficiency < LOTSPEED_GUARD_SEVERE_EFF_PCT)
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_30,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            else if (!cooldown &&
                 efficiency >= LOTSPEED_GUARD_UP_EFF_PCT)
                 lotspeed_guard_set_tier(sk, GUARD_PROBE_70,
                                         efficiency, tx_rate,
                                         delivery_rate);
             break;
 
+        case GUARD_LIMIT_30:
+            if (!cooldown &&
+                efficiency >= LOTSPEED_GUARD_UP_EFF_PCT)
+                lotspeed_guard_set_tier(sk, GUARD_PROBE_50,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            break;
+
+        case GUARD_PROBE_50:
+            if (efficiency < LOTSPEED_GUARD_SEVERE_EFF_PCT) {
+                ca->guard_cooldown_until = now +
+                    msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_30,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            } else {
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            }
+            break;
+
         case GUARD_PROBE_70:
             if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT) {
                 ca->guard_cooldown_until = now +
                     msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
-                lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
-                                        efficiency, tx_rate,
-                                        delivery_rate);
+                lotspeed_guard_set_tier(
+                    sk, lotspeed_guard_tier_for_efficiency(efficiency),
+                    efficiency, tx_rate, delivery_rate);
             } else {
                 lotspeed_guard_set_tier(sk, GUARD_LIMIT_70,
                                         efficiency, tx_rate,
@@ -951,8 +996,7 @@ evaluate_efficiency:
                 ca->guard_cooldown_until = now +
                     msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
                 lotspeed_guard_set_tier(sk,
-                    efficiency < LOTSPEED_GUARD_MID_EFF_PCT ?
-                    GUARD_LIMIT_50 : GUARD_LIMIT_70,
+                    lotspeed_guard_tier_for_efficiency(efficiency),
                     efficiency, tx_rate, delivery_rate);
             }
             break;
@@ -1025,7 +1069,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.8.2 core: original fixed-rate behavior plus a per-flow rate ceiling ---
+// --- v3.8.3 core: original fixed-rate behavior plus a per-flow rate ceiling ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1360,13 +1404,13 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
                 ca->guard_tier = GUARD_FULL;
                 ca->guard_bad_windows = 0;
                 ca->guard_cooldown_until = 0;
+                lotspeed_guard_reset_window(sk, now);
             }
             ca->ss_mode = true;
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
             ca->round_lost = tp->lost;
             ca->extra_acked = 0;
-            lotspeed_guard_reset_window(sk, now);
             break;
 
         case CA_EVENT_CWND_RESTART:
@@ -1377,12 +1421,12 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
                 ca->guard_tier = GUARD_FULL;
                 ca->guard_bad_windows = 0;
                 ca->guard_cooldown_until = 0;
+                lotspeed_guard_reset_window(sk, now);
             }
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
             ca->round_lost = tp->lost;
             ca->extra_acked = 0;
-            lotspeed_guard_reset_window(sk, now);
             break;
 
         default:
@@ -1426,7 +1470,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.8.2 - per-flow efficiency guard         ║\n");
+    pr_info("║    LotSpeed v3.8.3 - per-flow efficiency guard         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1462,7 +1506,7 @@ static int __init lotspeed_module_init(void)
     pr_info("  Pacing Gain: %u%% | ProbeRTT: %ums/%ums/%u%% cwnd\n",
             lotserver_pacing_gain, lotserver_probe_rtt_interval_ms,
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
-    pr_info("  Guard Tiers: >=80%% full | 50-79%% 70%% | <50%% 50%%\n");
+    pr_info("  Guard Tiers: >=80%% full | 50-79%% 70%% | 30-49%% 50%% | <30%% 30%%\n");
     pr_info("  Guard Timing: %ums down | %ums up | %ums cooldown\n",
             LOTSPEED_GUARD_DOWN_MS, LOTSPEED_GUARD_UP_MS,
             LOTSPEED_GUARD_COOLDOWN_MS);
@@ -1498,7 +1542,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.8.2 Unloaded                        ║\n");
+    pr_info("║        LotSpeed v3.8.3 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1514,6 +1558,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.8.2-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.8.2 - main-compatible per-flow efficiency guard");
+MODULE_VERSION("3.8.3-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.8.3 - main-compatible per-flow efficiency guard");
 MODULE_ALIAS("tcp_lotspeed");

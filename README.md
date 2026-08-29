@@ -1,16 +1,16 @@
-# LotSpeed 3.8.2 Enhanced
+# LotSpeed 3.8.3 Enhanced
 
 本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。正常连接恢复到经过验证的 upstream `main` 固定速率行为，只对持续发送效率很低的单条 MUX 降低目标速率上限。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v382.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v383.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
 
-`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8.2 中均为该主预设的兼容别名。
+`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8.3 中均为该主预设的兼容别名。
 
 ## 主配置
 
@@ -26,7 +26,7 @@ lotserver_loss_guard=0
 lotserver_hd_enable=0
 ```
 
-3.8.2 中 `lotserver_adaptive` 的语义已经收窄：
+3.8.3 中 `lotserver_adaptive` 的语义已经收窄：
 
 ```text
 adaptive=0：固定使用 lotserver_rate，不做低效率分档
@@ -35,7 +35,7 @@ adaptive=1：健康流仍固定使用 lotserver_rate，仅启用每连接效率�
 
 RTT、Jitter 或单次丢包不会直接触发效率分档。
 
-## 三档目标上限
+## 四档目标上限
 
 内核按每条 TCP 分别统计：
 
@@ -45,37 +45,40 @@ RTT、Jitter 或单次丢包不会直接触发效率分档。
 发送效率 = 有效接收 / 实际发送
 ```
 
-普通降档需要持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的完整十秒窗口。若效率低于70%，并且已经满足发送量条件，3.8.2 会在约两秒后进入受限档：效率在50%～70%时进入70%目标档，低于50%时进入50%目标档，以避免异常连接继续填充重传队列；发送量较小但至少出现16个重传段的明显异常流，也可以触发该快速保护；70%～79%的中等效率仍按完整十秒窗口判断。
+普通降档需要持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的完整十秒窗口。若效率低于70%，并且已经满足发送量条件，3.8.3 会在约两秒后进入受限档：效率在50%～70%时进入70%目标档，30%～49%进入50%目标档，低于30%进入30%目标档。至少发送256 KB且出现16个重传段的明显异常流可以覆盖普通接收窗口过滤。70%～79%的中等效率仍按完整十秒窗口判断。
 
 | 连续十秒发送效率 | 每连接目标上限 | 256 Mbps 配置下 |
 | --- | ---: | ---: |
 | `>= 80%` | `100% rate` | 256 Mbps |
 | `50%～79%` | `70% rate` | 179.2 Mbps |
-| `< 50%` | `50% rate` | 128 Mbps |
+| `30%～49%` | `50% rate` | 128 Mbps |
+| `< 30%` | `30% rate` | 76.8 Mbps |
 
 分档只修改该连接的 `target_rate` 上限。`gain=30`、`beta=820`、`cwnd=32..6000` 和 `pacing_gain=120%` 保持原版配置。
 
-目标速率不是严格整形。例如 128 Mbps 目标配合 120% pacing，内部 pacing 上限约为 153.6 Mbps。
+目标速率不是严格整形。例如 76.8 Mbps 目标配合 120% pacing，内部 pacing 上限约为 92.16 Mbps。
 
 ## 降档与恢复
 
 ```text
 FULL -> LIMIT_70：连续十秒效率为50%～79%，或合格的两秒窗口效率为50%～70%
-FULL -> LIMIT_50：合格的两秒窗口效率低于50%（极端快速保护）
-FULL -> LIMIT_50：普通情况下连续十秒效率低于50%
+FULL -> LIMIT_50：合格窗口效率为30%～49%
+FULL -> LIMIT_30：合格窗口效率低于30%（极端快速保护）
 LIMIT_70 -> LIMIT_50：连续十秒效率低于50%
+LIMIT_70/LIMIT_50 -> LIMIT_30：两秒窗口效率低于30%
 ```
 
 恢复采用两秒一级的受控探测：
 
 ```text
+LIMIT_30 效率连续两秒 >=85% -> 探测 LIMIT_50
 LIMIT_50 效率连续两秒 >=85% -> 探测 LIMIT_70
 LIMIT_70 效率连续两秒 >=85% -> 探测 FULL
 ```
 
-探测持续两秒。达到 80% 保持全速，50%～79% 保持 70% 档，低于 50% 返回 50% 档。探测失败后冷却十秒，避免弱线路在 128、179 和 256 Mbps 之间不断振荡。
+探测持续两秒并逐级恢复。达到 80% 保持全速，50%～79% 保持70%档，30%～49%保持50%档，低于30%返回30%档。探测失败后冷却十秒，避免弱线路在76.8、128、179.2和256 Mbps之间不断振荡。
 
-持续 30 秒没有有效负载后清除旧档位，下次传输从 FULL 开始重新观察。MUX keepalive 小包不会形成有效降档窗口。
+短暂的 MUX 发送停顿保留效率证据，避免每次突发都重新开始观察。持续30秒没有有效负载后才清除旧档位，下次传输从FULL开始重新观察；MUX keepalive小包不会形成有效降档窗口。
 
 ## MUX 内存配置
 

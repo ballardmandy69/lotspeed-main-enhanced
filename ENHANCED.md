@@ -1,13 +1,13 @@
-# LotSpeed 3.8.2 Enhanced
+# LotSpeed 3.8.3 Enhanced
 
-LotSpeed 3.8.2 returns healthy connections to the fixed-rate behavior of the
+LotSpeed 3.8.3 returns healthy connections to the fixed-rate behavior of the
 upstream `main` profile and adds one internal per-connection safeguard for
 long-lived TCP Mux traffic.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v382.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v383.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -26,7 +26,7 @@ The main profile is:
 | `lotserver_loss_guard` | `0` |
 | `lotserver_hd_enable` | `0` |
 
-In 3.8.2, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
+In 3.8.3, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
 Healthy flows retain the fixed `lotserver_rate`; they are not continuously
 adapted to measured bandwidth. Setting it to `0` disables the guard and gives
 the fixed upstream-main behavior.
@@ -42,14 +42,15 @@ a segment-counter approximation.
 | --- | ---: |
 | 80% or higher | 100% of `lotserver_rate` |
 | 50% through 79% | 70% of `lotserver_rate` |
-| Below 50% | 50% of `lotserver_rate` |
+| 30% through 49% | 50% of `lotserver_rate` |
+| Below 30% | 30% of `lotserver_rate` |
 
-With the recommended 256 Mbps ceiling, the tiers are 256, 179.2, and
-128 Mbps. The tier changes only the connection's target ceiling. CWND gain,
+With the recommended 256 Mbps ceiling, the tiers are 256, 179.2, 128, and
+76.8 Mbps. The tier changes only the connection's target ceiling. CWND gain,
 loss beta, pacing gain, and minimum/maximum CWND remain the same.
 
 The configured target is not a strict shaper. With `pacing_gain=120`, a
-128 Mbps target permits an internal pacing rate up to 153.6 Mbps.
+76.8 Mbps target permits an internal pacing rate up to 92.16 Mbps.
 
 ## Transition rules
 
@@ -57,22 +58,22 @@ Normal downshifts require a complete 10-second active window. The connection
 must transmit at least 70% of its current target during that window.
 Receive-window-limited samples are discarded for the normal path. A flow below
 70% efficiency is fast-braked after a qualifying 2-second sample: 50%-70%
-enters the 70% tier, while below 50% enters the 50% tier. The severe path can
-override the normal receive-window filter only when the sample contains at
-least 256 KB of transmitted data and 16 retransmitted segments. The 70%-79%
-middle range still uses the complete 10-second window.
+enters the 70% tier, 30%-49% enters the 50% tier, and below 30% enters the 30%
+tier. The severe path can override the normal receive-window filter only when
+the sample contains at least 256 KB of transmitted data and 16 retransmitted
+segments. The 70%-79% middle range still uses the complete 10-second window.
 
 Recovery is deliberately faster:
 
 1. A limited tier must reach at least 85% efficiency for two seconds.
-2. The guard probes the next tier for two seconds.
-3. At least 80% efficiency keeps the full-rate probe; 50% to 79% keeps the
-   70% tier; below 50% returns to the 50% tier.
+2. The guard probes one tier higher for two seconds: 30%, 50%, 70%, then full.
+3. At least 80% efficiency keeps the full-rate probe; 50%-79% keeps the 70%
+   tier, 30%-49% keeps the 50% tier, and below 30% returns to the 30% tier.
 4. A failed probe waits 10 seconds before another upward probe.
-5. After 30 seconds without sustained payload, the next active period starts
-   from the full tier with fresh counters.
+5. Short Mux pauses preserve evidence; only 30 seconds of idle time resets the
+   next active period to the full tier with fresh counters.
 
-These constants are internal by design. Version 3.8.2 does not expose another
+These constants are internal by design. Version 3.8.3 does not expose another
 set of degraded-mode tuning parameters.
 
 ## Mux socket buffers
