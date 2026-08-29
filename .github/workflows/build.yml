@@ -11,10 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.8.1-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.8.1-enhanced"' install.sh
-          grep -q 'VERSION="3.8.1-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.8.2-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.8.2-enhanced"' install.sh
+          grep -q 'VERSION="3.8.2-enhanced"' lotspeedctl
           grep -q 'write_param lotserver_rate 32000000' lotspeedctl
           grep -q 'write_param lotserver_gain 30' lotspeedctl
           grep -q 'write_param lotserver_beta 820' lotspeedctl
@@ -22,6 +22,8 @@ jobs:
           grep -q 'LOTSPEED_GUARD_DOWN_MS 10000' lotspeed.c
           grep -q 'LOTSPEED_GUARD_SEVERE_DOWN_MS 2000' lotspeed.c
           grep -q 'LOTSPEED_GUARD_FAST_EFF_PCT 70' lotspeed.c
+          grep -q 'LOTSPEED_GUARD_SEVERE_MIN_BYTES 262144' lotspeed.c
+          grep -q 'LOTSPEED_GUARD_SEVERE_MIN_RETRANS 16' lotspeed.c
           grep -q 'LOTSPEED_GUARD_UP_MS 2000' lotspeed.c
           grep -q 'GUARD_LIMIT_70' lotspeed.c
           grep -q 'GUARD_LIMIT_50' lotspeed.c

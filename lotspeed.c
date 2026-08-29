@@ -1,4 +1,4 @@
-// lotspeed.c - v3.8.1 main-compatible per-flow efficiency guard
+// lotspeed.c - v3.8.2 main-compatible per-flow efficiency guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -47,6 +47,8 @@
 #define LOTSPEED_GUARD_UP_EFF_PCT 85
 #define LOTSPEED_GUARD_MID_EFF_PCT 50
 #define LOTSPEED_GUARD_FAST_EFF_PCT 70
+#define LOTSPEED_GUARD_SEVERE_MIN_BYTES 262144
+#define LOTSPEED_GUARD_SEVERE_MIN_RETRANS 16
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -434,6 +436,7 @@ struct lotspeed {
     u32 min_rtt_stamp;
     u32 probe_prior_cwnd;
     u32 guard_stamp;
+    u32 guard_retrans_base;
     u32 next_rtt_delivered;
     u32 round_lost;
     u32 round_stamp;
@@ -509,6 +512,7 @@ static void lotspeed_init(struct sock *sk)
     ca->guard_tx_base = tp->data_segs_out;
 #endif
     ca->guard_acked_base = tp->bytes_acked;
+    ca->guard_retrans_base = tp->total_retrans;
 
     // v2.1特性
     ca->ss_mode = true;
@@ -754,6 +758,7 @@ static void lotspeed_guard_reset_window(struct sock *sk, u32 now)
 
     ca->guard_tx_base = lotspeed_tcp_tx_counter(tp);
     ca->guard_acked_base = tp->bytes_acked;
+    ca->guard_retrans_base = tp->total_retrans;
     ca->guard_stamp = now;
 }
 
@@ -801,6 +806,8 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
     u64 tx_rate;
     u64 delivery_rate;
     u64 active_floor;
+    u64 retrans_segs;
+    bool severe_sample;
     bool cooldown;
 
     if (!lotserver_adaptive || lotserver_turbo) {
@@ -820,6 +827,15 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
     acked_now = tp->bytes_acked;
     tx_bytes = lotspeed_tcp_tx_delta(tx_now, ca->guard_tx_base, mss);
     acked_bytes = acked_now - ca->guard_acked_base;
+    efficiency = tx_bytes ? (u32)min_t(u64,
+        div64_u64(acked_bytes * 100, tx_bytes), 100) : 0;
+    tx_rate = div64_u64(tx_bytes * 1000, elapsed_ms);
+    delivery_rate = div64_u64(acked_bytes * 1000, elapsed_ms);
+    retrans_segs = (u32)(tp->total_retrans - ca->guard_retrans_base);
+    severe_sample = ca->guard_tier == GUARD_FULL &&
+                    tx_bytes >= LOTSPEED_GUARD_SEVERE_MIN_BYTES &&
+                    retrans_segs >= LOTSPEED_GUARD_SEVERE_MIN_RETRANS &&
+                    efficiency < LOTSPEED_GUARD_FAST_EFF_PCT;
     active_floor = div64_u64(lotspeed_guard_cap(ca) * elapsed_ms,
                              1000);
     active_floor = lotspeed_scale_percent(active_floor,
@@ -827,6 +843,9 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
 
     if (!tx_bytes || tx_bytes < active_floor ||
         lotspeed_rwnd_limited(tp, mss)) {
+        if (severe_sample)
+            goto evaluate_efficiency;
+
         if (ca->guard_tier == GUARD_FULL &&
             elapsed_ms < LOTSPEED_GUARD_DOWN_MS)
             return;
@@ -845,10 +864,7 @@ static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
         return;
     }
 
-    efficiency = (u32)min_t(u64,
-        div64_u64(acked_bytes * 100, tx_bytes), 100);
-    tx_rate = div64_u64(tx_bytes * 1000, elapsed_ms);
-    delivery_rate = div64_u64(acked_bytes * 1000, elapsed_ms);
+evaluate_efficiency:
 
     /*
      * A low-efficiency flow should stop filling the retransmission queue
@@ -1009,7 +1025,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.8.1 core: original fixed-rate behavior plus a per-flow rate ceiling ---
+// --- v3.8.2 core: original fixed-rate behavior plus a per-flow rate ceiling ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1410,7 +1426,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.8.1 - per-flow efficiency guard         ║\n");
+    pr_info("║    LotSpeed v3.8.2 - per-flow efficiency guard         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1482,7 +1498,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.8.1 Unloaded                        ║\n");
+    pr_info("║        LotSpeed v3.8.2 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1498,6 +1514,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.8.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.8.1 - main-compatible per-flow efficiency guard");
+MODULE_VERSION("3.8.2-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.8.2 - main-compatible per-flow efficiency guard");
 MODULE_ALIAS("tcp_lotspeed");
