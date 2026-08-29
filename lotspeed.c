@@ -1,4 +1,4 @@
-// lotspeed.c - v3.7.1 severe-loss degraded-mode edition
+// lotspeed.c - v3.8 main-compatible per-flow efficiency guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -37,6 +37,14 @@
 #define LOTSPEED_MAX_U64 ((u64)~0ULL)
 #define LOTSPEED_LOSS_SCALE 1024
 #define LOTSPEED_ACK_EXTRA_MAX_US 100000
+#define LOTSPEED_GUARD_DOWN_MS 10000
+#define LOTSPEED_GUARD_UP_MS 2000
+#define LOTSPEED_GUARD_COOLDOWN_MS 10000
+#define LOTSPEED_GUARD_IDLE_RESET_MS 30000
+#define LOTSPEED_GUARD_ACTIVE_PCT 70
+#define LOTSPEED_GUARD_FULL_EFF_PCT 80
+#define LOTSPEED_GUARD_UP_EFF_PCT 85
+#define LOTSPEED_GUARD_MID_EFF_PCT 50
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -46,38 +54,30 @@
 #endif
 
 // --- 可调参数 ---
-static unsigned long lotserver_rate = 125000000ULL;  // 1Gbps 最高速率上限
+static unsigned long lotserver_rate = 32000000ULL;   // 256Mbps per-flow ceiling
 static unsigned int lotserver_gain = 30;               // 3.0x default gain
 static unsigned int lotserver_min_cwnd = 32;           // 最小拥塞窗口
-static unsigned int lotserver_max_cwnd = 10000;        // 最大拥塞窗口
-static unsigned int lotserver_beta = 871;              // about 85% cwnd retained
+static unsigned int lotserver_max_cwnd = 6000;         // 最大拥塞窗口
+static unsigned int lotserver_beta = 820;              // about 80% cwnd retained
 static bool lotserver_adaptive = true;
-static bool lotserver_congestion_only = false;
 static bool lotserver_turbo = false;
 static bool lotserver_verbose = false;
 static unsigned int lotserver_pacing_gain = 120;       // pacing rate percent
-static unsigned int lotserver_probe_rtt_interval_ms = 30000;
-static unsigned int lotserver_probe_rtt_duration_ms = 150;
-static unsigned int lotserver_probe_rtt_cwnd_pct = 50;
-static unsigned int lotserver_min_rtt_window_sec = 10;
+static unsigned int lotserver_probe_rtt_interval_ms = 300000;
+static unsigned int lotserver_probe_rtt_duration_ms = 100;
+static unsigned int lotserver_probe_rtt_cwnd_pct = 75;
+static unsigned int lotserver_min_rtt_window_sec = 30;
 static unsigned int lotserver_rtt_tolerance_pct = 60;
-static unsigned int lotserver_min_rate_pct = 60;
 static unsigned int lotserver_min_flight_ms = 0;
 static unsigned int lotserver_avoid_hold_ms = 500;
 static unsigned int lotserver_loss_congest_pct = 20;
 static unsigned int lotserver_loss_recover_pct = 8;
 static unsigned int lotserver_rtt_confirm_samples = 12;
-static bool lotserver_loss_guard = true;
-static unsigned int lotserver_noncong_beta = 972;      // 95% cwnd on likely random loss
-static bool lotserver_hd_enable = true;
+static bool lotserver_loss_guard = false;
+static unsigned int lotserver_noncong_beta = 820;
+static bool lotserver_hd_enable = false;
 static unsigned int lotserver_hd_thresh_us = 120000;
 static unsigned int lotserver_hd_gain_boost = 20;
-static bool lotserver_degraded_enable = false;
-static unsigned long lotserver_degraded_rate_min = 6250000ULL; // 50Mbps
-static unsigned long lotserver_degraded_rate_max = 12500000ULL; // 100Mbps
-static unsigned int lotserver_degraded_gain = 20; // 2.0x cwnd gain
-static unsigned int lotserver_degraded_loss_pct = 30;
-static unsigned int lotserver_degraded_recover_pct = 20;
 
 // --- 参数回调 (保留v2.1的详细日志格式) ---
 static int param_set_rate(const char *val, const struct kernel_param *kp)
@@ -194,48 +194,6 @@ static int param_set_beta(const char *val, const struct kernel_param *kp)
     return ret;
 }
 
-static int param_set_degraded_rate(const char *val,
-                                   const struct kernel_param *kp)
-{
-    unsigned long *value = kp->arg;
-    int ret = param_set_ulong(val, kp);
-
-    if (!ret) {
-        *value = clamp_t(unsigned long, *value, 125000,
-                         LOTSPEED_MAX_RATE);
-        if (kp->arg == &lotserver_degraded_rate_min &&
-            lotserver_degraded_rate_max < lotserver_degraded_rate_min)
-            lotserver_degraded_rate_max = lotserver_degraded_rate_min;
-        else if (kp->arg == &lotserver_degraded_rate_max &&
-                 lotserver_degraded_rate_min > lotserver_degraded_rate_max)
-            lotserver_degraded_rate_min = lotserver_degraded_rate_max;
-    }
-
-    return ret;
-}
-
-static int param_set_degraded_loss(const char *val,
-                                   const struct kernel_param *kp)
-{
-    unsigned int *value = kp->arg;
-    int ret = param_set_uint(val, kp);
-
-    if (ret)
-        return ret;
-
-    if (kp->arg == &lotserver_degraded_loss_pct) {
-        *value = clamp_t(unsigned int, *value, 2, 100);
-        if (lotserver_degraded_recover_pct >= *value)
-            lotserver_degraded_recover_pct = *value - 1;
-    } else {
-        *value = min_t(unsigned int, *value, 99);
-        if (*value >= lotserver_degraded_loss_pct)
-            *value = lotserver_degraded_loss_pct - 1;
-    }
-
-    return 0;
-}
-
 static int param_set_percent(const char *val, const struct kernel_param *kp)
 {
     int ret = param_set_uint(val, kp);
@@ -243,17 +201,6 @@ static int param_set_percent(const char *val, const struct kernel_param *kp)
 
     if (!ret)
         *value = clamp_t(unsigned int, *value, 1, 200);
-    return ret;
-}
-
-static int param_set_floor_percent(const char *val,
-                                   const struct kernel_param *kp)
-{
-    int ret = param_set_uint(val, kp);
-    unsigned int *value = kp->arg;
-
-    if (!ret)
-        *value = clamp_t(unsigned int, *value, 1, 100);
     return ret;
 }
 
@@ -349,8 +296,6 @@ static int param_set_seconds(const char *val, const struct kernel_param *kp)
 }
 
 static const struct kernel_param_ops param_ops_rate = { .set = param_set_rate, .get = param_get_ulong, };
-static const struct kernel_param_ops param_ops_degraded_rate = { .set = param_set_degraded_rate, .get = param_get_ulong, };
-static const struct kernel_param_ops param_ops_degraded_loss = { .set = param_set_degraded_loss, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_gain = { .set = param_set_gain, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_min_cwnd = { .set = param_set_min_cwnd, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_max_cwnd = { .set = param_set_max_cwnd, .get = param_get_uint, };
@@ -358,7 +303,6 @@ static const struct kernel_param_ops param_ops_adaptive = { .set = param_set_ada
 static const struct kernel_param_ops param_ops_turbo = { .set = param_set_turbo, .get = param_get_bool, };
 static const struct kernel_param_ops param_ops_beta = { .set = param_set_beta, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_percent = { .set = param_set_percent, .get = param_get_uint, };
-static const struct kernel_param_ops param_ops_floor_percent = { .set = param_set_floor_percent, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_probe_percent = { .set = param_set_probe_percent, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_loss_congest = { .set = param_set_loss_congest, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_loss_recover = { .set = param_set_loss_recover, .get = param_get_uint, };
@@ -382,10 +326,7 @@ module_param_cb(lotserver_max_cwnd, &param_ops_max_cwnd, &lotserver_max_cwnd, 06
 MODULE_PARM_DESC(lotserver_max_cwnd, "Maximum congestion window");
 
 module_param_cb(lotserver_adaptive, &param_ops_adaptive, &lotserver_adaptive, 0644);
-MODULE_PARM_DESC(lotserver_adaptive, "Enable adaptive rate control");
-
-module_param(lotserver_congestion_only, bool, 0644);
-MODULE_PARM_DESC(lotserver_congestion_only, "Apply adaptive rate control only while avoiding congestion");
+MODULE_PARM_DESC(lotserver_adaptive, "Enable the per-flow efficiency guard");
 
 module_param_cb(lotserver_turbo, &param_ops_turbo, &lotserver_turbo, 0644);
 MODULE_PARM_DESC(lotserver_turbo, "Turbo mode - ignore all congestion signals");
@@ -413,9 +354,6 @@ MODULE_PARM_DESC(lotserver_min_rtt_window_sec, "Minimum RTT refresh window in se
 
 module_param_cb(lotserver_rtt_tolerance_pct, &param_ops_percent, &lotserver_rtt_tolerance_pct, 0644);
 MODULE_PARM_DESC(lotserver_rtt_tolerance_pct, "RTT inflation tolerance percent");
-
-module_param_cb(lotserver_min_rate_pct, &param_ops_floor_percent, &lotserver_min_rate_pct, 0644);
-MODULE_PARM_DESC(lotserver_min_rate_pct, "Adaptive minimum rate as percent of rate ceiling");
 
 module_param_cb(lotserver_min_flight_ms, &param_ops_optional_flight_msec, &lotserver_min_flight_ms, 0644);
 MODULE_PARM_DESC(lotserver_min_flight_ms, "Minimum target-rate flight window in milliseconds (0 disables)");
@@ -447,28 +385,6 @@ MODULE_PARM_DESC(lotserver_hd_thresh_us, "High-delay path threshold in microseco
 module_param_cb(lotserver_hd_gain_boost, &param_ops_percent, &lotserver_hd_gain_boost, 0644);
 MODULE_PARM_DESC(lotserver_hd_gain_boost, "High-delay cwnd gain boost percent");
 
-module_param(lotserver_degraded_enable, bool, 0644);
-MODULE_PARM_DESC(lotserver_degraded_enable, "Limit sustained severe-loss flows to the degraded rate range");
-
-module_param_cb(lotserver_degraded_rate_min, &param_ops_degraded_rate,
-               &lotserver_degraded_rate_min, 0644);
-MODULE_PARM_DESC(lotserver_degraded_rate_min, "Minimum target rate for sustained severe-loss flows in bytes/sec");
-
-module_param_cb(lotserver_degraded_rate_max, &param_ops_degraded_rate,
-               &lotserver_degraded_rate_max, 0644);
-MODULE_PARM_DESC(lotserver_degraded_rate_max, "Maximum target rate for sustained severe-loss flows in bytes/sec");
-
-module_param_cb(lotserver_degraded_gain, &param_ops_gain, &lotserver_degraded_gain, 0644);
-MODULE_PARM_DESC(lotserver_degraded_gain, "CWND gain for sustained severe-loss flows (x10)");
-
-module_param_cb(lotserver_degraded_loss_pct, &param_ops_degraded_loss,
-                &lotserver_degraded_loss_pct, 0644);
-MODULE_PARM_DESC(lotserver_degraded_loss_pct, "Loss EWMA percent required to enter degraded mode");
-
-module_param_cb(lotserver_degraded_recover_pct, &param_ops_degraded_loss,
-                &lotserver_degraded_recover_pct, 0644);
-MODULE_PARM_DESC(lotserver_degraded_recover_pct, "Loss EWMA percent required to leave degraded mode");
-
 // --- 统计信息 (整合v2.1的详细统计) ---
 static atomic_t active_connections = ATOMIC_INIT(0);
 static atomic64_t total_bytes_sent = ATOMIC64_INIT(0);
@@ -489,38 +405,43 @@ enum lotspeed_path_mode {
     PATH_CONGESTED
 };
 
+enum lotspeed_guard_tier {
+    GUARD_FULL,
+    GUARD_LIMIT_70,
+    GUARD_LIMIT_50,
+    GUARD_PROBE_70,
+    GUARD_PROBE_FULL
+};
+
 // --- v3.5 per-connection state ---
 struct lotspeed {
     // Keep u64 fields together so the structure stays below older kernels'
     // congestion-control private-state limit.
-    u64 target_rate;
     u64 actual_rate;
-    u64 last_bw;
-    u64 bytes_sent;
+    u64 guard_tx_base;
+    u64 guard_acked_base;
 
-    u32 cwnd_gain;
     u32 last_state_ts;
     u32 probe_rtt_ts;
-    u32 last_cruise_ts;
+    u32 guard_cooldown_until;
     u32 rtt_min;
     u32 rtt_candidate;
-    u32 loss_count;
     u32 rtt_dev;
     u32 rtt_prev;
     u32 loss_ewma;
     u32 min_rtt_stamp;
     u32 probe_prior_cwnd;
-    u32 probe_cnt;
+    u32 guard_stamp;
     u32 next_rtt_delivered;
     u32 round_lost;
     u32 round_stamp;
     u16 extra_acked;
     u8 state;
-    u8 bw_stalled_rounds;
+    u8 guard_tier;
+    u8 guard_bad_windows;
     u8 rtt_high_count;
     u8 path_mode;
     bool ss_mode;
-    bool degraded;
 };
 
 // 将状态转换为字符串，用于日志
@@ -556,10 +477,6 @@ static void enter_state(struct sock *sk, enum lotspeed_state new_state) {
         ca->state = new_state;
         ca->last_state_ts = tcp_jiffies32;
 
-        // 特殊状态处理
-        if (new_state == CRUISING) {
-            ca->last_cruise_ts = tcp_jiffies32;
-        }
     }
 }
 
@@ -576,17 +493,20 @@ static void lotspeed_init(struct sock *sk)
     ca->state = STARTUP;
     ca->last_state_ts = tcp_jiffies32;
     ca->probe_rtt_ts = tcp_jiffies32;
-    ca->last_cruise_ts = 0;
+    ca->guard_cooldown_until = 0;
     ca->min_rtt_stamp = tcp_jiffies32;
-    ca->probe_cnt = tcp_jiffies32;
+    ca->guard_stamp = tcp_jiffies32;
     ca->round_stamp = tcp_jiffies32;
     ca->next_rtt_delivered = tp->delivered;
     ca->round_lost = tp->lost;
     ca->path_mode = PATH_STABLE;
-
-    // 初始目标速率设为全局上限，让智能启动去探索
-    ca->target_rate = lotserver_rate;
-    ca->cwnd_gain = lotserver_gain;
+    ca->guard_tier = GUARD_FULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+    ca->guard_tx_base = tp->bytes_sent;
+#else
+    ca->guard_tx_base = tp->data_segs_out;
+#endif
+    ca->guard_acked_base = tp->bytes_acked;
 
     // v2.1特性
     ca->ss_mode = true;
@@ -605,10 +525,10 @@ static void lotspeed_init(struct sock *sk)
     atomic_inc(&active_connections);
 
     if (lotserver_verbose) {
-        unsigned long gbps_int = ca->target_rate / 125000000;
-        unsigned long gbps_frac = (ca->target_rate % 125000000) * 100 / 125000000;
-        unsigned int gain_int = ca->cwnd_gain / 10;
-        unsigned int gain_frac = ca->cwnd_gain % 10;
+        unsigned long gbps_int = lotserver_rate / 125000000;
+        unsigned long gbps_frac = (lotserver_rate % 125000000) * 100 / 125000000;
+        unsigned int gain_int = lotserver_gain / 10;
+        unsigned int gain_frac = lotserver_gain % 10;
 
         pr_info("lotspeed: [uk0@%s] NEW connection #%d | rate=%lu.%02lu Gbps | gain=%u.%ux | mode=%s | state=%s\n",
                 CURRENT_TIMESTAMP,
@@ -616,9 +536,7 @@ static void lotspeed_init(struct sock *sk)
                 gbps_int, gbps_frac,
                 gain_int, gain_frac,
                 lotserver_turbo ? "TURBO" :
-                (!lotserver_adaptive ? "fixed" :
-                 (lotserver_congestion_only ? "congestion-only" :
-                  "adaptive")),
+                lotserver_adaptive ? "fixed+efficiency-guard" : "fixed",
                 state_to_str(ca->state));
     }
 }
@@ -626,6 +544,7 @@ static void lotspeed_init(struct sock *sk)
 // 释放连接
 static void lotspeed_release(struct sock *sk)
 {
+    struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
 
     if (!ca) {
@@ -636,17 +555,12 @@ static void lotspeed_release(struct sock *sk)
 
     atomic_dec(&active_connections);
 
-    if (ca->bytes_sent > 0) {
-        atomic64_add(ca->bytes_sent, &total_bytes_sent);
-    }
-    if (ca->loss_count > 0) {
-        atomic_add(ca->loss_count, &total_losses);
-    }
-
+    if (tp->bytes_acked > 0)
+        atomic64_add(tp->bytes_acked, &total_bytes_sent);
     if (lotserver_verbose) {
-        u64 mb_sent = ca->bytes_sent >> 20;
+        u64 mb_sent = tp->bytes_acked >> 20;
         pr_info("lotspeed: [uk0@%s] connection released | sent=%llu MB | losses=%u | active=%d\n",
-                CURRENT_TIMESTAMP, mb_sent, ca->loss_count,
+                CURRENT_TIMESTAMP, mb_sent, tp->total_retrans,
                 atomic_read(&active_connections));
     }
 
@@ -732,10 +646,6 @@ static void lotspeed_update_path_mode(struct sock *sk,
         if (ca->rtt_high_count < 255)
             ca->rtt_high_count++;
     } else if (ca->rtt_high_count > 0) {
-        if (lotserver_congestion_only &&
-            ca->path_mode == PATH_CONGESTED)
-            decay = 8;
-
         ca->rtt_high_count = ca->rtt_high_count > decay ?
                              ca->rtt_high_count - decay : 0;
     }
@@ -787,68 +697,224 @@ static u64 lotspeed_scale_percent(u64 value, u32 percent)
     return div64_u64(value * percent, 100);
 }
 
-static u64 lotspeed_adaptive_floor(const struct lotspeed *ca)
+static const char *guard_to_str(u8 tier)
 {
-    u64 floor = max_t(u64,
-                      lotspeed_scale_percent(lotserver_rate,
-                                             lotserver_min_rate_pct),
-                      125000);
-
-    if (ca->actual_rate)
-        floor = max_t(u64, floor,
-                      lotspeed_scale_percent(ca->actual_rate, 90));
-    return min_t(u64, floor, lotserver_rate);
-}
-
-static bool lotspeed_update_degraded_mode(struct lotspeed *ca)
-{
-    u32 enter_loss;
-    u32 recover_loss;
-
-    if (!lotserver_adaptive || !lotserver_degraded_enable ||
-        lotserver_turbo) {
-        ca->degraded = false;
-        return false;
+    switch (tier) {
+        case GUARD_FULL: return "FULL";
+        case GUARD_LIMIT_70: return "LIMIT_70";
+        case GUARD_LIMIT_50: return "LIMIT_50";
+        case GUARD_PROBE_70: return "PROBE_70";
+        case GUARD_PROBE_FULL: return "PROBE_FULL";
+        default: return "UNKNOWN";
     }
-
-    enter_loss = lotserver_degraded_loss_pct * LOTSPEED_LOSS_SCALE / 100;
-    recover_loss = lotserver_degraded_recover_pct * LOTSPEED_LOSS_SCALE / 100;
-
-    if (!ca->degraded && ca->loss_ewma >= enter_loss)
-        ca->degraded = true;
-    else if (ca->degraded && ca->loss_ewma <= recover_loss)
-        ca->degraded = false;
-
-    return ca->degraded;
 }
 
-/* Keep a sustained severe-loss flow useful while removing its large bursts. */
-static u64 lotspeed_degraded_target(const struct lotspeed *ca)
+static u64 lotspeed_guard_cap(const struct lotspeed *ca)
 {
-    u64 floor = min_t(u64, lotserver_degraded_rate_min, lotserver_rate);
-    u64 ceiling = min_t(u64, lotserver_degraded_rate_max, lotserver_rate);
-    u64 target;
-
-    if (ceiling < floor)
-        floor = ceiling;
-
-    target = ca->actual_rate ?
-             lotspeed_scale_percent(ca->actual_rate, 105) : ceiling;
-    return clamp_t(u64, target, floor, ceiling);
-}
-
-static u32 lotspeed_cruise_headroom(const struct lotspeed *ca)
-{
-    switch (ca->path_mode) {
-        case PATH_STABLE:
-            return 110;
-        case PATH_JITTERY:
-            return 108;
-        case PATH_CONGESTED:
-            return 105;
+    switch (ca->guard_tier) {
+        case GUARD_LIMIT_70:
+        case GUARD_PROBE_70:
+            return lotspeed_scale_percent(lotserver_rate, 70);
+        case GUARD_LIMIT_50:
+            return lotspeed_scale_percent(lotserver_rate, 50);
+        case GUARD_FULL:
+        case GUARD_PROBE_FULL:
         default:
-            return 108;
+            return lotserver_rate;
     }
+}
+
+static u64 lotspeed_tcp_tx_counter(const struct tcp_sock *tp)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+    /* bytes_sent already includes original transmissions and retransmits. */
+    return tp->bytes_sent;
+#else
+    return tp->data_segs_out;
+#endif
+}
+
+static u64 lotspeed_tcp_tx_delta(u64 current, u64 previous, u32 mss)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+    (void)mss;
+    return current - previous;
+#else
+    return (u64)(u32)((u32)current - (u32)previous) * mss;
+#endif
+}
+
+static void lotspeed_guard_reset_window(struct sock *sk, u32 now)
+{
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct lotspeed *ca = inet_csk_ca(sk);
+
+    ca->guard_tx_base = lotspeed_tcp_tx_counter(tp);
+    ca->guard_acked_base = tp->bytes_acked;
+    ca->guard_stamp = now;
+}
+
+static bool lotspeed_rwnd_limited(const struct tcp_sock *tp, u32 mss)
+{
+    u64 flight = (u64)tcp_packets_in_flight(tp) * mss;
+
+    if (!tp->snd_wnd)
+        return true;
+    return (u64)tp->snd_wnd <= flight + (u64)mss * 2;
+}
+
+static void lotspeed_guard_set_tier(struct sock *sk, u8 new_tier,
+                                    u32 efficiency, u64 tx_rate,
+                                    u64 delivery_rate)
+{
+    struct lotspeed *ca = inet_csk_ca(sk);
+    u8 old_tier = ca->guard_tier;
+
+    if (old_tier == new_tier)
+        return;
+
+    ca->guard_tier = new_tier;
+    ca->guard_bad_windows = 0;
+
+    if (lotserver_verbose)
+        pr_info("lotspeed: [uk0@%s] guard %s -> %s | efficiency=%u%% tx=%llu delivery=%llu bytes/s\n",
+                CURRENT_TIMESTAMP, guard_to_str(old_tier),
+                guard_to_str(new_tier), efficiency,
+                tx_rate, delivery_rate);
+}
+
+static void lotspeed_update_efficiency_guard(struct sock *sk, u32 mss,
+                                             u32 now)
+{
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct lotspeed *ca = inet_csk_ca(sk);
+    u32 required_ms;
+    u32 elapsed_ms;
+    u32 efficiency;
+    u64 tx_now;
+    u64 acked_now;
+    u64 tx_bytes;
+    u64 acked_bytes;
+    u64 tx_rate;
+    u64 delivery_rate;
+    u64 active_floor;
+    bool cooldown;
+
+    if (!lotserver_adaptive || lotserver_turbo) {
+        ca->guard_tier = GUARD_FULL;
+        ca->guard_bad_windows = 0;
+        ca->guard_cooldown_until = 0;
+        lotspeed_guard_reset_window(sk, now);
+        return;
+    }
+
+    required_ms = ca->guard_tier == GUARD_FULL ?
+                  LOTSPEED_GUARD_DOWN_MS : LOTSPEED_GUARD_UP_MS;
+    elapsed_ms = jiffies_to_msecs(now - ca->guard_stamp);
+    if (elapsed_ms < required_ms)
+        return;
+
+    tx_now = lotspeed_tcp_tx_counter(tp);
+    acked_now = tp->bytes_acked;
+    tx_bytes = lotspeed_tcp_tx_delta(tx_now, ca->guard_tx_base, mss);
+    acked_bytes = acked_now - ca->guard_acked_base;
+    active_floor = div64_u64(lotspeed_guard_cap(ca) * elapsed_ms,
+                             1000);
+    active_floor = lotspeed_scale_percent(active_floor,
+                                           LOTSPEED_GUARD_ACTIVE_PCT);
+
+    if (!tx_bytes || tx_bytes < active_floor ||
+        lotspeed_rwnd_limited(tp, mss)) {
+        ca->guard_bad_windows = 0;
+        if (ca->guard_tier == GUARD_PROBE_70 ||
+            ca->guard_tier == GUARD_PROBE_FULL) {
+            u8 fallback = ca->guard_tier == GUARD_PROBE_70 ?
+                          GUARD_LIMIT_50 : GUARD_LIMIT_70;
+
+            ca->guard_cooldown_until = now +
+                msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
+            lotspeed_guard_set_tier(sk, fallback, 0, 0, 0);
+        }
+        lotspeed_guard_reset_window(sk, now);
+        return;
+    }
+
+    efficiency = (u32)min_t(u64,
+        div64_u64(acked_bytes * 100, tx_bytes), 100);
+    tx_rate = div64_u64(tx_bytes * 1000, elapsed_ms);
+    delivery_rate = div64_u64(acked_bytes * 1000, elapsed_ms);
+    cooldown = ca->guard_cooldown_until &&
+               time_before32(now, ca->guard_cooldown_until);
+
+    switch (ca->guard_tier) {
+        case GUARD_FULL:
+            if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT)
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            else if (efficiency < LOTSPEED_GUARD_FULL_EFF_PCT)
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_70,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            break;
+
+        case GUARD_LIMIT_70:
+            if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT) {
+                if (++ca->guard_bad_windows >=
+                    LOTSPEED_GUARD_DOWN_MS / LOTSPEED_GUARD_UP_MS)
+                    lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
+                                            efficiency, tx_rate,
+                                            delivery_rate);
+            } else {
+                ca->guard_bad_windows = 0;
+                if (!cooldown &&
+                    efficiency >= LOTSPEED_GUARD_UP_EFF_PCT)
+                    lotspeed_guard_set_tier(sk, GUARD_PROBE_FULL,
+                                            efficiency, tx_rate,
+                                            delivery_rate);
+            }
+            break;
+
+        case GUARD_LIMIT_50:
+            if (!cooldown &&
+                efficiency >= LOTSPEED_GUARD_UP_EFF_PCT)
+                lotspeed_guard_set_tier(sk, GUARD_PROBE_70,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            break;
+
+        case GUARD_PROBE_70:
+            if (efficiency < LOTSPEED_GUARD_MID_EFF_PCT) {
+                ca->guard_cooldown_until = now +
+                    msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_50,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            } else {
+                lotspeed_guard_set_tier(sk, GUARD_LIMIT_70,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            }
+            break;
+
+        case GUARD_PROBE_FULL:
+            if (efficiency >= LOTSPEED_GUARD_FULL_EFF_PCT) {
+                ca->guard_cooldown_until = 0;
+                lotspeed_guard_set_tier(sk, GUARD_FULL,
+                                        efficiency, tx_rate,
+                                        delivery_rate);
+            } else {
+                ca->guard_cooldown_until = now +
+                    msecs_to_jiffies(LOTSPEED_GUARD_COOLDOWN_MS);
+                lotspeed_guard_set_tier(sk,
+                    efficiency < LOTSPEED_GUARD_MID_EFF_PCT ?
+                    GUARD_LIMIT_50 : GUARD_LIMIT_70,
+                    efficiency, tx_rate, delivery_rate);
+            }
+            break;
+    }
+
+    lotspeed_guard_reset_window(sk, now);
 }
 
 /* Update delivery, loss, and ACK aggregation once per packet-timed RTT. */
@@ -915,12 +981,13 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.6 core: speed-floor model with packet-timed path learning ---
+// --- v3.8 core: original fixed-rate behavior plus a per-flow rate ceiling ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
     u64 pacing_rate;
+    u64 target_rate;
     u32 rtt_us = tp->srtt_us >> 3;
     u32 path_rtt;
     u32 bdp_rtt;
@@ -929,14 +996,12 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     u32 mss = tp->mss_cache ? : 1460;
     u32 now = tcp_jiffies32;
     u32 effective_gain;
+    u32 cwnd_gain;
     u32 pacing_gain;
     u32 pipe;
-    u64 adaptive_floor;
     bool congestion_detected = false;
-    bool continuous_adaptive;
     bool rtt_inflated;
     bool high_delay_path;
-    bool degraded_path;
 
     if (rs && rs->rtt_us > 0) {
         rtt_us = (u32)min_t(unsigned long, rs->rtt_us,
@@ -950,15 +1015,9 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         rtt_us = ca->rtt_min ? : 1000;
     path_rtt = rtt_us;
 
-    if (rs && rs->acked_sacked > 0)
-        ca->bytes_sent += (u64)rs->acked_sacked * mss;
-
     lotspeed_update_round_model(sk, rs, mss, path_rtt);
+    lotspeed_update_efficiency_guard(sk, mss, now);
     rtt_inflated = ca->path_mode == PATH_CONGESTED;
-    adaptive_floor = lotspeed_adaptive_floor(ca);
-    continuous_adaptive = lotserver_adaptive &&
-                          !lotserver_congestion_only;
-    degraded_path = lotspeed_update_degraded_mode(ca);
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
@@ -984,28 +1043,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case STARTUP:
             if (congestion_detected) {
                 enter_state(sk, AVOIDING);
-            } else if (continuous_adaptive && ca->actual_rate > 0 &&
-                       time_after32(now, ca->probe_cnt +
-                                    msecs_to_jiffies(LOTSPEED_RATE_SAMPLE_MS))) {
-                if (!ca->last_bw ||
-                    ca->actual_rate * LOTSPEED_BETA_SCALE >
-                    ca->last_bw * LOTSPEED_STARTUP_GROWTH_TARGET) {
-                    ca->last_bw = ca->actual_rate;
-                    ca->bw_stalled_rounds = 0;
-                } else {
-                    ca->bw_stalled_rounds++;
-                }
-                ca->probe_cnt = now;
-                if (ca->bw_stalled_rounds >= LOTSPEED_STARTUP_EXIT_ROUNDS) {
-                    ca->target_rate = min_t(u64, lotserver_rate,
-                                            lotspeed_scale_percent(
-                                                ca->actual_rate,
-                                                lotspeed_cruise_headroom(ca)));
-                    ca->ss_mode = false;
-                    enter_state(sk, PROBING);
-                }
-            } else if (!continuous_adaptive &&
-                       time_after32(now, ca->last_state_ts +
+            } else if (time_after32(now, ca->last_state_ts +
                                     msecs_to_jiffies(LOTSPEED_PROBE_RATE_MS))) {
                 ca->ss_mode = false;
                 enter_state(sk, CRUISING);
@@ -1015,55 +1053,17 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         case PROBING:
             if (congestion_detected) {
                 enter_state(sk, AVOIDING);
-            } else if (!continuous_adaptive) {
+            } else {
                 enter_state(sk, CRUISING);
-            } else if (time_after32(now, ca->probe_cnt +
-                                    msecs_to_jiffies(LOTSPEED_PROBE_RATE_MS))) {
-                ca->target_rate = min_t(u64, lotserver_rate,
-                                        lotspeed_scale_percent(
-                                            ca->target_rate,
-                                            ca->path_mode == PATH_STABLE ? 108 :
-                                            ca->path_mode == PATH_JITTERY ? 106 :
-                                            103));
-                ca->probe_cnt = now;
-                if (ca->actual_rate >
-                    lotspeed_scale_percent(ca->target_rate, 90))
-                    enter_state(sk, CRUISING);
             }
             break;
 
         case CRUISING:
-            if (congestion_detected) {
+            if (congestion_detected)
                 enter_state(sk, AVOIDING);
-            } else if (continuous_adaptive && ca->actual_rate > 0) {
-                ca->target_rate = clamp_t(u64,
-                                          lotspeed_scale_percent(
-                                              ca->actual_rate,
-                                              lotspeed_cruise_headroom(ca)),
-                                          adaptive_floor,
-                                          (u64)lotserver_rate);
-            }
-            if (!congestion_detected && continuous_adaptive &&
-                time_after32(now, ca->last_cruise_ts +
-                             msecs_to_jiffies(LOTSPEED_CRUISE_TIME_MS))) {
-                ca->probe_cnt = now;
-                enter_state(sk, PROBING);
-            }
             break;
 
         case AVOIDING:
-            if (lotserver_adaptive && ca->actual_rate > 0) {
-                /*
-                 * Keep the ACK clock alive. Congested pacing stays at the
-                 * target, while 105% delivery headroom preserves useful
-                 * throughput as the queue and cwnd settle.
-                 */
-                ca->target_rate = clamp_t(u64,
-                                          lotspeed_scale_percent(
-                                              ca->actual_rate, 105),
-                                          adaptive_floor,
-                                          (u64)lotserver_rate);
-            }
             if (!congestion_detected &&
                 time_after32(now, ca->last_state_ts +
                              msecs_to_jiffies(lotserver_avoid_hold_ms))) {
@@ -1080,59 +1080,44 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
             break;
     }
 
-    if (!lotserver_adaptive ||
-        (lotserver_congestion_only && ca->state != AVOIDING))
-        ca->target_rate = lotserver_rate;
-    if (degraded_path)
-        ca->target_rate = lotspeed_degraded_target(ca);
+    target_rate = lotspeed_guard_cap(ca);
 
     effective_gain = lotserver_gain;
-    if (degraded_path)
-        effective_gain = min_t(u32, effective_gain, lotserver_degraded_gain);
     if (high_delay_path)
         effective_gain = min_t(u32, LOTSPEED_MAX_GAIN,
                                effective_gain +
                                effective_gain * lotserver_hd_gain_boost / 100);
-    if (ca->path_mode == PATH_CONGESTED)
-        effective_gain = max_t(u32, effective_gain * 98 / 100, 10);
 
     switch (ca->state) {
         case STARTUP:
-            ca->cwnd_gain = min_t(u32, LOTSPEED_MAX_GAIN,
-                                  effective_gain * 12 / 10);
-            if (continuous_adaptive)
-                ca->target_rate = lotserver_rate;
+            cwnd_gain = min_t(u32, LOTSPEED_MAX_GAIN,
+                              effective_gain * 12 / 10);
             break;
         case PROBING:
-            ca->cwnd_gain = effective_gain;
+            cwnd_gain = effective_gain;
             break;
         case CRUISING:
-            ca->cwnd_gain = effective_gain;
+            cwnd_gain = effective_gain;
             break;
         case AVOIDING:
-            ca->cwnd_gain = degraded_path ? max_t(u32, effective_gain, 10) :
-                                            max_t(u32, effective_gain * 98 / 100, 10);
+            cwnd_gain = max_t(u32, effective_gain * 8 / 10, 10);
             break;
         case PROBE_RTT:
-            ca->cwnd_gain = effective_gain;
+            cwnd_gain = effective_gain;
+            break;
+        default:
+            cwnd_gain = effective_gain;
             break;
     }
 
-    ca->target_rate = clamp_t(u64, ca->target_rate, 125000,
-                              (u64)lotserver_rate);
+    target_rate = clamp_t(u64, target_rate, 125000,
+                          (u64)lotserver_rate);
 
-    bdp_rtt = ca->rtt_min ? : rtt_us;
-    if (ca->rtt_min && ca->rtt_dev) {
-        u64 allowance = min_t(u64, (u64)ca->rtt_dev * 2,
-                              ca->rtt_min / 4);
-
-        bdp_rtt = (u32)min_t(u64, (u64)ca->rtt_min + allowance,
-                             LOTSPEED_MAX_U32);
-    }
+    bdp_rtt = rtt_us;
 
     if (mss > 0 && bdp_rtt > 0 &&
-        ca->target_rate <= div64_u64(LOTSPEED_MAX_U64, bdp_rtt)) {
-        u64 bdp = ca->target_rate * bdp_rtt;
+        target_rate <= div64_u64(LOTSPEED_MAX_U64, bdp_rtt)) {
+        u64 bdp = target_rate * bdp_rtt;
         u64 ack_rate;
         u32 ack_cap;
         u32 ack_extra;
@@ -1140,14 +1125,14 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         target_cwnd = (u32)min_t(u64,
             div64_u64(bdp, (u64)mss * USEC_PER_SEC), LOTSPEED_MAX_U32);
         target_cwnd = (u32)min_t(u64,
-            div64_u64((u64)target_cwnd * ca->cwnd_gain, 10),
+            div64_u64((u64)target_cwnd * cwnd_gain, 10),
             LOTSPEED_MAX_U32);
 
-        if (lotserver_min_flight_ms && !degraded_path &&
-            ca->target_rate <= div64_u64(LOTSPEED_MAX_U64,
-                                         lotserver_min_flight_ms)) {
+        if (lotserver_min_flight_ms &&
+            target_rate <= div64_u64(LOTSPEED_MAX_U64,
+                                     lotserver_min_flight_ms)) {
             u32 flight_floor = (u32)min_t(u64,
-                div64_u64(ca->target_rate * lotserver_min_flight_ms,
+                div64_u64(target_rate * lotserver_min_flight_ms,
                           (u64)mss * 1000),
                 LOTSPEED_MAX_U32);
 
@@ -1155,8 +1140,8 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         }
 
         ack_rate = ca->actual_rate ?
-                   min_t(u64, ca->actual_rate, ca->target_rate) :
-                   ca->target_rate;
+                   min_t(u64, ca->actual_rate, target_rate) :
+                   target_rate;
         ack_cap = (u32)min_t(u64,
             div64_u64(ack_rate * LOTSPEED_ACK_EXTRA_MAX_US,
                       (u64)mss * USEC_PER_SEC),
@@ -1170,8 +1155,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
         u32 retained = (u32)div_u64((u64)ca->probe_prior_cwnd *
                                     min_t(u32, lotserver_probe_rtt_cwnd_pct, 100),
                                     100);
-        u64 probe_rate = degraded_path ? lotspeed_degraded_target(ca) :
-                         continuous_adaptive ? adaptive_floor : ca->target_rate;
+        u64 probe_rate = target_rate;
         u32 probe_floor = 0;
 
         if (mss && ca->rtt_min &&
@@ -1208,29 +1192,25 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
     pacing_gain = lotserver_pacing_gain;
-    if (ca->path_mode == PATH_JITTERY)
-        pacing_gain = min_t(u32, pacing_gain, 103);
-    else if (ca->path_mode == PATH_CONGESTED)
-        pacing_gain = min_t(u32, pacing_gain, 100);
-
-    pacing_rate = lotspeed_scale_percent(ca->target_rate, pacing_gain);
+    pacing_rate = lotspeed_scale_percent(target_rate, pacing_gain);
     WRITE_ONCE(sk->sk_pacing_rate,
                min_t(u64, pacing_rate, sk->sk_max_pacing_rate));
 #endif
 
     if (lotserver_verbose && rs && rs->losses > 0 &&
-        ca->loss_count > 0 &&
-        ca->loss_count % 100 == 0) {
-        unsigned long gbps_int = ca->target_rate / 125000000;
-        unsigned long gbps_frac = (ca->target_rate % 125000000) * 100 / 125000000;
-        unsigned int gain_int = ca->cwnd_gain / 10;
-        unsigned int gain_frac = ca->cwnd_gain % 10;
+        tp->total_retrans > 0 &&
+        tp->total_retrans % 100 == 0) {
+        unsigned long gbps_int = target_rate / 125000000;
+        unsigned long gbps_frac = (target_rate % 125000000) * 100 / 125000000;
+        unsigned int gain_int = cwnd_gain / 10;
+        unsigned int gain_frac = cwnd_gain % 10;
 
-        pr_info("lotspeed: [uk0@%s] STATUS: [%s/%s] cwnd=%u | rate=%lu.%02lu Gbps | RTT=%u us | jitter=%u us | gain=%u.%ux | losses=%u\n",
+        pr_info("lotspeed: [uk0@%s] STATUS: [%s/%s/%s] cwnd=%u | rate=%lu.%02lu Gbps | RTT=%u us | jitter=%u us | gain=%u.%ux | losses=%u\n",
                 CURRENT_TIMESTAMP, state_to_str(ca->state),
-                path_to_str(ca->path_mode), tp->snd_cwnd,
+                path_to_str(ca->path_mode), guard_to_str(ca->guard_tier),
+                tp->snd_cwnd,
                 gbps_int, gbps_frac, rtt_us, ca->rtt_dev,
-                gain_int, gain_frac, ca->loss_count);
+                gain_int, gain_frac, tp->total_retrans);
     }
 }
 
@@ -1259,8 +1239,7 @@ static u32 lotspeed_ssthresh(struct sock *sk)
         return TCP_INFINITE_SSTHRESH;
     }
 
-    ca->loss_count++;
-    ca->cwnd_gain = max_t(u32, ca->cwnd_gain * 9 / 10, 10);
+    atomic_inc(&total_losses);
 
     if (lotserver_loss_guard) {
         if (ca->path_mode == PATH_STABLE) {
@@ -1279,31 +1258,27 @@ static u32 lotspeed_ssthresh(struct sock *sk)
 // 处理状态变化 (TCP_CA_Loss)
 static void lotspeed_set_state_hook(struct sock *sk, u8 new_state)
 {
+    struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
 
     switch (new_state) {
         case TCP_CA_Loss:
             if (lotserver_turbo) {
-                if (lotserver_verbose && ca->loss_count % 10 == 0) {
+                if (lotserver_verbose && tp->total_retrans % 10 == 0) {
                     pr_info("lotspeed: [uk0@%s] TURBO: Ignoring loss #%u\n",
-                            CURRENT_TIMESTAMP, ca->loss_count + 1);
+                            CURRENT_TIMESTAMP, tp->total_retrans + 1);
                 }
                 return;
             }
             enter_state(sk, AVOIDING);
 
-            if (lotserver_verbose && (ca->loss_count == 1 || ca->loss_count % 10 == 0)) {
-                unsigned int gain_int = ca->cwnd_gain / 10;
-                unsigned int gain_frac = ca->cwnd_gain % 10;
-                pr_info("lotspeed: [uk0@%s] LOSS #%u detected, gain reduced to %u.%ux\n",
-                        CURRENT_TIMESTAMP, ca->loss_count, gain_int, gain_frac);
-            }
+            if (lotserver_verbose &&
+                (tp->total_retrans == 1 || tp->total_retrans % 10 == 0))
+                pr_info("lotspeed: [uk0@%s] LOSS detected after %u retransmissions\n",
+                        CURRENT_TIMESTAMP, tp->total_retrans);
             break;
 
         case TCP_CA_Recovery:
-            if (!lotserver_turbo) {
-                ca->cwnd_gain = max_t(u32, ca->cwnd_gain * 9 / 10, 15);
-            }
             break;
 
         case TCP_CA_Open:
@@ -1320,8 +1295,7 @@ static u32 lotspeed_undo_cwnd(struct sock *sk)
     struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
 
-    // 误判恢复，重置丢包计数
-    ca->loss_count = 0;
+    // 误判恢复
     ca->ss_mode = false;
 
     return min_t(u32, max(tp->snd_cwnd, tp->prior_cwnd),
@@ -1332,31 +1306,39 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
 {
     struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
+    u32 now = tcp_jiffies32;
 
     switch (event) {
-        case CA_EVENT_LOSS:
-            if (!lotserver_turbo) {
-                ca->cwnd_gain = max_t(u32, ca->cwnd_gain * 9 / 10, 10);
-            }
-            break;
-
         case CA_EVENT_TX_START:
+            if (time_after32(now, ca->round_stamp +
+                             msecs_to_jiffies(
+                                 LOTSPEED_GUARD_IDLE_RESET_MS))) {
+                ca->guard_tier = GUARD_FULL;
+                ca->guard_bad_windows = 0;
+                ca->guard_cooldown_until = 0;
+            }
             ca->ss_mode = true;
-            ca->probe_cnt = tcp_jiffies32;
-            ca->round_stamp = tcp_jiffies32;
+            ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
             ca->round_lost = tp->lost;
             ca->extra_acked = 0;
+            lotspeed_guard_reset_window(sk, now);
             break;
 
         case CA_EVENT_CWND_RESTART:
             ca->ss_mode = true;
-            ca->loss_count = 0;
-            ca->probe_cnt = tcp_jiffies32;
-            ca->round_stamp = tcp_jiffies32;
+            if (time_after32(now, ca->round_stamp +
+                             msecs_to_jiffies(
+                                 LOTSPEED_GUARD_IDLE_RESET_MS))) {
+                ca->guard_tier = GUARD_FULL;
+                ca->guard_bad_windows = 0;
+                ca->guard_cooldown_until = 0;
+            }
+            ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
             ca->round_lost = tp->lost;
             ca->extra_acked = 0;
+            lotspeed_guard_reset_window(sk, now);
             break;
 
         default:
@@ -1400,7 +1382,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║      LotSpeed v3.7.1 - severe-loss degraded mode       ║\n");
+    pr_info("║      LotSpeed v3.8 - per-flow efficiency guard         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1429,23 +1411,17 @@ static int __init lotspeed_module_init(void)
     pr_info("  Max Gain: %u.%ux\n", gain_int, gain_frac);
     pr_info("  Min/Max CWND: %u/%u\n", lotserver_min_cwnd, lotserver_max_cwnd);
     pr_info("  Fairness Beta: %u/1024\n", lotserver_beta);
-    pr_info("  Adaptive: %s | Congestion-only: %s | Turbo: %s | Verbose: %s\n",
+    pr_info("  Efficiency Guard: %s | Turbo: %s | Verbose: %s\n",
              lotserver_adaptive ? "ON" : "OFF",
-             lotserver_congestion_only ? "ON" : "OFF",
              lotserver_turbo ? "ON" : "OFF",
              lotserver_verbose ? "ON" : "OFF");
     pr_info("  Pacing Gain: %u%% | ProbeRTT: %ums/%ums/%u%% cwnd\n",
             lotserver_pacing_gain, lotserver_probe_rtt_interval_ms,
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
-    pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
-             lotserver_min_rate_pct);
-    pr_info("  Degraded Flows: %s | Rate: %lu-%lu bytes/s | Gain: %u.%ux\n",
-             lotserver_degraded_enable ? "ON" : "OFF",
-             lotserver_degraded_rate_min, lotserver_degraded_rate_max,
-             lotserver_degraded_gain / 10, lotserver_degraded_gain % 10);
-    pr_info("  Degraded Loss: enter %u%% | recover %u%%\n",
-             lotserver_degraded_loss_pct,
-             lotserver_degraded_recover_pct);
+    pr_info("  Guard Tiers: >=80%% full | 50-79%% 70%% | <50%% 50%%\n");
+    pr_info("  Guard Timing: %ums down | %ums up | %ums cooldown\n",
+            LOTSPEED_GUARD_DOWN_MS, LOTSPEED_GUARD_UP_MS,
+            LOTSPEED_GUARD_COOLDOWN_MS);
     pr_info("  Minimum Flight Window: %u ms\n",
             lotserver_min_flight_ms);
     pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
@@ -1478,7 +1454,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║          LotSpeed v3.7.1 Unloaded                      ║\n");
+    pr_info("║          LotSpeed v3.8 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1494,6 +1470,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.7.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.7.1 - severe-loss-only degraded mode");
+MODULE_VERSION("3.8-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.8 - main-compatible per-flow efficiency guard");
 MODULE_ALIAS("tcp_lotspeed");

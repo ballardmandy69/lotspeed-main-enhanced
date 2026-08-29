@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.7.1 enhanced installer
+# LotSpeed v3.8 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v371.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v380.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.7.1}"
+GITHUB_REF="${LOTSPEED_REF:-v3.8}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.7.1-enhanced"
+VERSION="3.8-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -116,9 +116,7 @@ validate_built_module() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
-        lotserver_min_rate_pct
         lotserver_min_flight_ms
-        lotserver_congestion_only
         lotserver_avoid_hold_ms
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
@@ -128,12 +126,6 @@ validate_built_module() {
         lotserver_hd_enable
         lotserver_hd_thresh_us
         lotserver_hd_gain_boost
-        lotserver_degraded_enable
-        lotserver_degraded_rate_min
-        lotserver_degraded_rate_max
-        lotserver_degraded_gain
-        lotserver_degraded_loss_pct
-        lotserver_degraded_recover_pct
     )
 
     built_version="$(modinfo -F version "${built_module}" 2>/dev/null || true)"
@@ -146,7 +138,7 @@ validate_built_module() {
             fail "Built module is missing ${parameter}. Refusing to install an incomplete module."
     done
 
-    info "Validated module ${built_version} and enhanced parameter set."
+    info "Validated module ${built_version} and v3.8 parameter set."
 }
 
 choose_fallback_cc() {
@@ -170,9 +162,7 @@ install_module() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
-        lotserver_min_rate_pct
         lotserver_min_flight_ms
-        lotserver_congestion_only
         lotserver_avoid_hold_ms
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
@@ -182,12 +172,6 @@ install_module() {
         lotserver_hd_enable
         lotserver_hd_thresh_us
         lotserver_hd_gain_boost
-        lotserver_degraded_enable
-        lotserver_degraded_rate_min
-        lotserver_degraded_rate_max
-        lotserver_degraded_gain
-        lotserver_degraded_loss_pct
-        lotserver_degraded_recover_pct
     )
 
     if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
@@ -202,6 +186,7 @@ install_module() {
     install -d -m 0755 "${MODULE_DEST}"
     install -m 0644 "${INSTALL_DIR}/lotspeed.ko" "${MODULE_DEST}/lotspeed.ko"
     depmod -a
+    rm -f /etc/modprobe.d/lotspeed.conf
     modprobe "${MODULE_NAME}"
 
     grep -qw "${MODULE_NAME}" /proc/sys/net/ipv4/tcp_available_congestion_control ||
@@ -245,8 +230,8 @@ main() {
     install_management
 
     printf '\nLotSpeed %s installed successfully.\n' "${VERSION}"
-    printf 'Recommended preset for mixed clients in China:\n'
-    printf '  lotspeed preset domestic-mixed\n'
+    printf 'Recommended preset for one-Mux-per-user traffic:\n'
+    printf '  lotspeed preset main-guarded\n'
     printf 'Check it with:\n'
     printf '  lotspeed status\n'
 }

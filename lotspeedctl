@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.7.1 enhanced management utility
+# LotSpeed v3.8 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.7.1-enhanced"
+VERSION="3.8-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -108,29 +108,21 @@ set_param() {
 set_common_safety() {
     write_param lotserver_turbo 0
     write_param lotserver_pacing_gain 120
-    write_param lotserver_probe_rtt_interval_ms 30000
-    write_param lotserver_probe_rtt_duration_ms 150
-    write_param lotserver_probe_rtt_cwnd_pct 50
-    write_param lotserver_min_rtt_window_sec 10
+    write_param lotserver_probe_rtt_interval_ms 300000
+    write_param lotserver_probe_rtt_duration_ms 100
+    write_param lotserver_probe_rtt_cwnd_pct 75
+    write_param lotserver_min_rtt_window_sec 30
     write_param lotserver_rtt_tolerance_pct 60
-    write_param lotserver_min_rate_pct 60
     write_param lotserver_min_flight_ms 0
-    write_param lotserver_congestion_only 0
     write_param lotserver_avoid_hold_ms 500
     write_param lotserver_loss_congest_pct 20
     write_param lotserver_loss_recover_pct 8
     write_param lotserver_rtt_confirm_samples 12
-    write_param lotserver_loss_guard 1
-    write_param lotserver_noncong_beta 972
-    write_param lotserver_hd_enable 1
+    write_param lotserver_loss_guard 0
+    write_param lotserver_noncong_beta 820
+    write_param lotserver_hd_enable 0
     write_param lotserver_hd_thresh_us 120000
     write_param lotserver_hd_gain_boost 20
-    write_param lotserver_degraded_enable 0
-    write_param lotserver_degraded_rate_min 6250000
-    write_param lotserver_degraded_rate_max 12500000
-    write_param lotserver_degraded_gain 20
-    write_param lotserver_degraded_loss_pct 30
-    write_param lotserver_degraded_recover_pct 20
 }
 
 apply_preset() {
@@ -142,7 +134,6 @@ apply_preset() {
         lotserver_min_cwnd
         lotserver_max_cwnd
         lotserver_adaptive
-        lotserver_congestion_only
         lotserver_turbo
         lotserver_pacing_gain
         lotserver_probe_rtt_interval_ms
@@ -150,7 +141,6 @@ apply_preset() {
         lotserver_probe_rtt_cwnd_pct
         lotserver_min_rtt_window_sec
         lotserver_rtt_tolerance_pct
-        lotserver_min_rate_pct
         lotserver_min_flight_ms
         lotserver_avoid_hold_ms
         lotserver_loss_congest_pct
@@ -161,12 +151,6 @@ apply_preset() {
         lotserver_hd_enable
         lotserver_hd_thresh_us
         lotserver_hd_gain_boost
-        lotserver_degraded_enable
-        lotserver_degraded_rate_min
-        lotserver_degraded_rate_max
-        lotserver_degraded_gain
-        lotserver_degraded_loss_pct
-        lotserver_degraded_recover_pct
     )
 
     require_root
@@ -174,60 +158,15 @@ apply_preset() {
     require_params "${enhanced_parameters[@]}"
 
     case "${preset}" in
-        domestic-mixed|domestic)
-            # Overseas server to mixed Chinese fixed, WiFi and mobile users.
-            write_param lotserver_rate 31250000
+        domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
+            # Original main behavior with a per-Mux efficiency rate ceiling.
+            write_param lotserver_rate 32000000
             write_param lotserver_gain 30
-            write_param lotserver_beta 871
+            write_param lotserver_beta 820
             write_param lotserver_min_cwnd 32
-            write_param lotserver_max_cwnd 10000
+            write_param lotserver_max_cwnd 6000
             write_param lotserver_adaptive 1
             set_common_safety
-            write_param lotserver_degraded_enable 1
-            write_param lotserver_degraded_rate_min 6250000
-            write_param lotserver_degraded_rate_max 12500000
-            write_param lotserver_degraded_gain 20
-            write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 50
-            write_param lotserver_rtt_tolerance_pct 60
-            write_param lotserver_loss_congest_pct 20
-            write_param lotserver_loss_recover_pct 8
-            write_param lotserver_rtt_confirm_samples 8
-            write_param lotserver_noncong_beta 1000
-            write_param lotserver_hd_enable 0
-            write_param lotserver_avoid_hold_ms 1000
-            write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_probe_rtt_interval_ms 60000
-            write_param lotserver_probe_rtt_duration_ms 100
-            ;;
-        mux-throughput|mux)
-            # Congestion-gated profile for a few long-lived Mux sockets.
-            write_param lotserver_rate 31250000
-            write_param lotserver_gain 30
-            write_param lotserver_beta 871
-            write_param lotserver_min_cwnd 32
-            write_param lotserver_max_cwnd 10000
-            write_param lotserver_adaptive 1
-            set_common_safety
-            write_param lotserver_congestion_only 1
-            write_param lotserver_degraded_enable 1
-            write_param lotserver_degraded_rate_min 6250000
-            write_param lotserver_degraded_rate_max 12500000
-            write_param lotserver_degraded_gain 20
-            write_param lotserver_avoid_hold_ms 1000
-            write_param lotserver_min_flight_ms 250
-            write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 50
-            write_param lotserver_rtt_tolerance_pct 80
-            write_param lotserver_loss_congest_pct 30
-            write_param lotserver_loss_recover_pct 25
-            write_param lotserver_rtt_confirm_samples 8
-            write_param lotserver_noncong_beta 1000
-            write_param lotserver_hd_enable 0
-            write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_probe_rtt_interval_ms 300000
-            write_param lotserver_probe_rtt_duration_ms 100
-            write_param lotserver_probe_rtt_cwnd_pct 75
             configure_mux_buffers
             ;;
         ct-163-return|ct-return)
@@ -239,14 +178,9 @@ apply_preset() {
             write_param lotserver_max_cwnd 6000
             write_param lotserver_adaptive 1
             set_common_safety
-            write_param lotserver_degraded_enable 1
-            write_param lotserver_degraded_rate_min 6250000
-            write_param lotserver_degraded_rate_max 12500000
-            write_param lotserver_degraded_gain 20
             write_param lotserver_pacing_gain 100
             write_param lotserver_loss_guard 0
             write_param lotserver_hd_enable 0
-            write_param lotserver_min_rate_pct 20
             write_param lotserver_rtt_tolerance_pct 60
             write_param lotserver_loss_congest_pct 20
             write_param lotserver_loss_recover_pct 8
@@ -255,31 +189,6 @@ apply_preset() {
             write_param lotserver_min_rtt_window_sec 30
             write_param lotserver_probe_rtt_interval_ms 60000
             write_param lotserver_probe_rtt_duration_ms 100
-            ;;
-        wan-enhanced)
-            # Healthy and moderate-congestion flows can use 250 Mbps; only
-            # sustained severe-loss flows use the 50-100 Mbps range.
-            write_param lotserver_rate 31250000
-            write_param lotserver_gain 30
-            write_param lotserver_beta 820
-            write_param lotserver_min_cwnd 32
-            write_param lotserver_max_cwnd 10000
-            write_param lotserver_adaptive 1
-            set_common_safety
-            write_param lotserver_degraded_enable 1
-            write_param lotserver_degraded_rate_min 6250000
-            write_param lotserver_degraded_rate_max 12500000
-            write_param lotserver_degraded_gain 20
-            write_param lotserver_pacing_gain 100
-            write_param lotserver_min_rate_pct 50
-            write_param lotserver_congestion_only 0
-            write_param lotserver_avoid_hold_ms 1000
-            write_param lotserver_loss_congest_pct 20
-            write_param lotserver_loss_recover_pct 8
-            write_param lotserver_rtt_confirm_samples 8
-            write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_hd_enable 0
-            write_param lotserver_noncong_beta 900
             ;;
         conservative)
             write_param lotserver_rate 125000000
@@ -320,10 +229,11 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
-  domestic-mixed - Mixed China fixed, WiFi, mobile and campus clients
-  mux-throughput - 250 Mbps congestion-gated profile with weak-flow cap
+  main-guarded   - Original 256 Mbps main profile with per-Mux tiers
+  domestic-mixed - Alias for main-guarded
+  mux-throughput - Alias for main-guarded
   ct-163-return - Overseas to China Telecom ordinary 163 route
-  wan-enhanced  - 250 Mbps ceiling, 125 Mbps floor; severe loss 50-100
+  wan-enhanced  - Alias for main-guarded
   conservative  - 1 Gbps ceiling, adaptive, low queue pressure
   balanced      - 5 Gbps ceiling, adaptive
   aggressive    - 10 Gbps ceiling, adaptive
@@ -383,14 +293,6 @@ show_status() {
                     "${name}" "${value}" "$((value * 8 / 1000000))"
                 ;;
             lotserver_gain)
-                printf '  %-32s %s (%d.%dx cwnd gain)\n' \
-                    "${name}" "${value}" "$((value / 10))" "$((value % 10))"
-                ;;
-            lotserver_degraded_rate_min|lotserver_degraded_rate_max)
-                printf '  %-32s %s bytes/s (%s Mbps)\n' \
-                    "${name}" "${value}" "$((value * 8 / 1000000))"
-                ;;
-            lotserver_degraded_gain)
                 printf '  %-32s %s (%d.%dx cwnd gain)\n' \
                     "${name}" "${value}" "$((value / 10))" "$((value % 10))"
                 ;;

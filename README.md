@@ -1,194 +1,115 @@
-### lotspeed 开心版
+# LotSpeed 3.8 Enhanced
 
-<div align=center>
-    <img src="https://github.com/uk0/lotspeed/blob/main/logo.png" width="400" height="400" />
-</div>
+本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。正常连接恢复到经过验证的 upstream `main` 固定速率行为，只对持续发送效率很低的单条 MUX 降低目标速率上限。
 
-### v3.7.1 严重丢包才进入弱网档
-
-针对 Nyanpass 等长生命周期 TCP Mux 隧道，以及用户连接数较多的服务器：
+## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v371.sh | sudo bash
-lotspeed preset wan-enhanced
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v380.sh | sudo bash
+sudo lotspeed preset main-guarded
 lotspeed status
 ```
 
-`wan-enhanced` 按每条 TCP 连接独立判断路径：正常连接上限为 250 Mbps；只有丢包 EWMA 达到 30% 的持续严重丢包连接才进入 50-100 Mbps 弱网档，降到 20% 后退出。RTT 膨胀、Jitter 和普通拥塞只进入常规拥塞规避，不再触发弱网限速。弱网档配置 2.0 倍 CWND 增益（拥塞修正后实际约 1.9 倍）并取消额外飞行窗口，降低突发、重传和 PPS。`lotserver_noncong_beta=900` 和关闭高延迟补偿仍然保留。
+`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8 中均为该主预设的兼容别名。
 
-3.7.1 继续使用 3.6.4 的队列与内存配置（由 `mux-throughput` 写入）：
+## 主配置
 
 ```text
-net.ipv4.tcp_wmem=8192 524288 16777216
-net.ipv4.tcp_rmem=8192 524288 16777216
-net.core.wmem_max=16777216
+lotserver_rate=32000000       # 256 Mbps
+lotserver_gain=30             # 3.0x
+lotserver_beta=820            # 约保留80%
+lotserver_min_cwnd=32
+lotserver_max_cwnd=6000
+lotserver_adaptive=1
+lotserver_pacing_gain=120
+lotserver_loss_guard=0
+lotserver_hd_enable=0
+```
+
+3.8 中 `lotserver_adaptive` 的语义已经收窄：
+
+```text
+adaptive=0：固定使用 lotserver_rate，不做低效率分档
+adaptive=1：健康流仍固定使用 lotserver_rate，仅启用每连接效率保护
+```
+
+RTT、Jitter 或单次丢包不会直接触发效率分档。
+
+## 三档目标上限
+
+内核按每条 TCP 分别统计：
+
+```text
+实际发送 = 新发送TCP载荷 + 重传TCP载荷
+有效接收 = 对端新确认的ACK载荷
+发送效率 = 有效接收 / 实际发送
+```
+
+只有持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的十秒窗口才参与降档判断。
+
+| 连续十秒发送效率 | 每连接目标上限 | 256 Mbps 配置下 |
+| --- | ---: | ---: |
+| `>= 80%` | `100% rate` | 256 Mbps |
+| `50%～79%` | `70% rate` | 179.2 Mbps |
+| `< 50%` | `50% rate` | 128 Mbps |
+
+分档只修改该连接的 `target_rate` 上限。`gain=30`、`beta=820`、`cwnd=32..6000` 和 `pacing_gain=120%` 保持原版配置。
+
+目标速率不是严格整形。例如 128 Mbps 目标配合 120% pacing，内部 pacing 上限约为 153.6 Mbps。
+
+## 降档与恢复
+
+```text
+FULL -> LIMIT_70：连续十秒效率为50%～79%
+FULL -> LIMIT_50：连续十秒效率低于50%
+LIMIT_70 -> LIMIT_50：连续十秒效率低于50%
+```
+
+恢复采用两秒一级的受控探测：
+
+```text
+LIMIT_50 效率连续两秒 >=85% -> 探测 LIMIT_70
+LIMIT_70 效率连续两秒 >=85% -> 探测 FULL
+```
+
+探测持续两秒。达到 80% 保持全速，50%～79% 保持 70% 档，低于 50% 返回 50% 档。探测失败后冷却十秒，避免弱线路在 128、179 和 256 Mbps 之间不断振荡。
+
+持续 30 秒没有有效负载后清除旧档位，下次传输从 FULL 开始重新观察。MUX keepalive 小包不会形成有效降档窗口。
+
+## MUX 内存配置
+
+主预设同时写入：
+
+```text
 net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=8192 524288 16777216
+net.ipv4.tcp_wmem=8192 524288 16777216
 net.ipv4.tcp_notsent_lowat=262144
 net.ipv4.tcp_limit_output_bytes=1048576
 ```
 
-`tcp_notsent_lowat` 不是单连接总内存硬上限；已经发送但尚未确认的数据、重传队列和内核元数据仍由 TCP 发送缓存容纳。已有大队列不会因为套用预设立即缩小，需等待排空或连接重建。
+`tcp_notsent_lowat` 会对应用未发送队列施加背压，但不是单连接总内存硬上限。已经发送但尚未确认的数据、重传队列和 TCP 元数据仍会占用发送缓存。
 
-### 国内混合终端速度优先版
-
-海外服务器同时面向国内不同地区、宽带、WiFi、移动网络和校园网时，使用：
+## 常用命令
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v371.sh | sudo bash
-lotspeed preset domestic-mixed
 lotspeed status
+sudo lotspeed set lotserver_verbose 1
+sudo lotspeed logs 100
+sudo lotspeed preset main-guarded
 ```
 
-`domestic-mixed` 同样使用每连接 250 Mbps 上限和 50-100 Mbps 严重丢包档，默认 `gain=30`、`max_cwnd=10000`。每条 TCP 连接按 RTT 轮次独立更新交付率和丢包。普通拥塞判定仍可由 20% 丢包，或连续 8 个 RTT 的明显排队并伴随约 8% 丢包触发；但只有独立的 30% 丢包 EWMA 门槛会触发 50-100 Mbps 弱网限速。
+旧版本升级时，安装器会清理包含已删除 `degraded_*` 参数的旧 `/etc/modprobe.d/lotspeed.conf`，避免新模块因未知参数加载失败。
 
-### main-enhanced
+如果 Secure Boot 开启并出现 `Key was rejected by service`，需要关闭 Secure Boot，或者使用已加入 MOK 的密钥签名 `lotspeed.ko`。这与拥塞控制算法本身无关。
 
-本仓库的 `main` 基于 [`uk0/lotspeed`](https://github.com/uk0/lotspeed) 的 `main`，保留固定速率模式的直接性，并选择性合并其他分支中适合公网高延迟、随机丢包线路的设计：
-
-* 修正 adaptive 模式把 `rate_sample.delivered` 包数误当成字节数的问题。
-* 修正 Linux 6.10 起 `cong_control` 回调签名的兼容边界。
-* ProbeRTT 默认每 30 秒触发 150ms，并保留 50% 原窗口，减少周期性吞吐断崖。
-* 无明显 RTT 膨胀时，对随机丢包使用较温和的退让。
-* CWND 按最小 RTT 加有界 Jitter 计算，避免排队 RTT 反向放大队列。
-* 按 RTT 轮次过滤交付率、丢包和 ACK 聚合，减少 ACK 频率造成的误判。
-* ProbeRTT 不会把窗口降到维持发送速度底线所需的 1 BDP 以下。
-* 移除不安全的“卸载失败后重新注册算法”流程。
-
-本地测试安装：
+## 构建
 
 ```bash
 git clone https://github.com/ballardmandy69/lotspeed-main-enhanced.git
 cd lotspeed-main-enhanced
-sudo bash install.sh
-lotspeed preset domestic-mixed
-lotspeed status
+make
 ```
 
-分支推送后可直接安装：
-
-```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v371.sh | sudo bash
-lotspeed preset domestic-mixed
-```
-
-`wan-enhanced` 是本版本面向国内混合终端的主预设：`rate=31250000`（250 Mbps）、`gain=30`、`beta=820`、`cwnd=32..10000`、`adaptive=1`。正常 adaptive 地板为 50%（125 Mbps），因此健康流和普通拥塞流不会落入 50-100 Mbps 区间；丢包 EWMA 达到 `degraded_loss_pct=30` 后才进入该区间，降到 `degraded_recover_pct=20` 后恢复正常档。
-
-普通非 CN2 电信 163 回国方向建议：
-
-```bash
-lotspeed preset ct-163-return
-```
-
-该预设将 `31250000` 作为每连接上限而非固定发送目标，启用 adaptive，并对所有丢包进行拥塞退让。
-
-如果旧安装输出中出现 `M=/root`，说明编译误用了 `/root` 下的旧源码。`3.7.1-enhanced` 使用不可变版本整包安装并修复该问题；重新运行一键安装时，正确日志应显示：
-
-```text
-make -C /lib/modules/.../build M=/opt/lotspeed modules
-```
-
-安装器会在替换旧模块前检查 `.ko` 版本和增强参数，不再接受遗留构建产物。
-
-
-### branch explanation
-
-* `main`: lotspeed 自动优化版本最新版
-* `v3.1`: lotspeed 最小优化算法版本
-* `zeta-tcp`: lotspeed zeta-tcp 版本([Appex Networking zeta-tcp](https://appexnetworks.com/wp-content/uploads/2024/02/ZetaTCP-Whitepaper-V2.0.pdf))
-
-
-* auto install
-
-
-```bash
-# 直接安装最新版
-wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/main/install.sh | sudo bash
-# zeta-tcp 版本
-wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/zeta-tcp/install.sh | sudo bash
-# 暴力版本
-wget -qO- https://raw.githubusercontent.com/uk0/lotspeed/v3.1/install.sh | sudo bash
-```
-
-
-* manual compile and load
-
-```bash
-
-# 下载代码/编译
-
-git clone https://github.com/uk0/lotspeed.git 
-
-cd lotspeed && make
-
-# 加载模块
-sudo insmod lotspeed.ko
-
-# 设置为当前拥塞控制算法
-sudo sysctl -w net.ipv4.tcp_congestion_control=lotspeed
-sudo sysctl -w net.ipv4.tcp_no_metrics_save=1
-
-# 查看是否生效
-sysctl net.ipv4.tcp_congestion_control
-
-# 查看日志
-dmesg -w
-
-```
-
-### LotSpeed 核心参数配置说明表
-
-| 参数名称 (`sysctl`/`module`)           | 作用说明 (Description)                                        | 单位/换算 (Unit) | 默认值 | 推荐范围 (Ratio/Range) | 调整建议 |
-|:-----------------------------------|:----------------------------------------------------------| :--- | :--- | :--- | :--- |
-| **`lotserver_rate`**               | **每连接目标速率上限**<br>该参数全局配置，但分别应用到每条 TCP 连接，不是服务器总带宽整形器。             | **Bytes/sec**<br>250Mbps = 31,250,000 | 125000000<br>(1Gbps) | 按单连接目标设置 | 多连接总发送量可以超过该值；服务器总出口限制应交给 qdisc 或外部整形。 |
-| **`lotserver_start_rate`**         | **zeta-tcp版本独有，软启动初始速率**<br>新连接建立时的起步速度。保护小带宽客户端不被瞬间流量淹没。 | **Bytes/sec**<br>10Mbps ≈ 1,250,000 | 6250000<br>(50Mbps) | **物理带宽的 30% - 50%** | 对于 100M 口，建议设为 `5000000` (40Mbps) 到 `7500000` (60Mbps)。设太高会导致起步丢包，设太低起步慢。 |
-| **`lotserver_gain`**               | **拥塞窗口增益 (Pacing Gain)**<br>倍率因子。决定算法有多“激进”地去抢占带宽。        | **数值 / 10**<br>30 = 3.0倍 | 30 | **15 (1.5倍) - 30 (3.0倍)** | 当前国内混合终端配置默认使用 `30`，优先维持足够在途数据。 |
-| **`lotserver_beta`**               | **丢包退让比例 (Fairness)**<br>当发生严重拥塞必须降速时，保留多少窗口。             | **数值 / 1024**<br>871 ≈ 保留85% | 871 | **614 (60%) - 921 (90%)** | 当前默认 `871`，发生拥塞时保留约 85.06% 的窗口。 |
-| **`lotserver_min_cwnd`**           | **最小拥塞窗口**<br>无论网络多差，窗口绝不低于此值。                            | **Packets (包数)** | 16 | **4 - 64** | 16 是安全值。设为 `32` 或 `64` 可以提高起步速度，但在拥塞时可能加剧丢包。 |
-| **`lotserver_max_cwnd`**           | **最大拥塞窗口**<br>窗口的绝对物理上限，防止 Bufferbloat。                   | **Packets (包数)** | 10000 | **5000 - 30000** | 国内混合预设使用 `10000`，给 300-400ms 路径保留足够在途数据。<br>更高值会增加每连接内存和排队压力。 |
-| **`lotserver_degraded_enable`**    | **弱网档开关**<br>仅对持续严重丢包的单条 TCP 连接启用弱网目标。                | **0 / 1** | 0 | **建议 1** | RTT 膨胀和 Jitter 不会单独触发；不是按 IP 限速。 |
-| **`lotserver_degraded_rate_min`**  | **弱网档最低目标**<br>确认拥塞连接的发送目标地板。                            | **Bytes/sec**<br>50Mbps = 6,250,000 | 6250000 | 按目标设置 | 这是发送目标，不是低于物理容量时的速度保证。 |
-| **`lotserver_degraded_rate_max`**  | **弱网档最高目标**<br>确认拥塞连接的发送目标上限。                            | **Bytes/sec**<br>100Mbps = 12,500,000 | 12500000 | 按目标设置 | 用于减少弱网连接的突发、重传和 PPS。 |
-| **`lotserver_degraded_gain`**      | **弱网档 CWND 增益**<br>严重丢包连接使用的窗口增益。                         | **数值 / 10**<br>20 = 2.0倍 | 20 | **15 - 20** | 比健康流的 `gain=30` 更克制，避免继续填满队列。 |
-| **`lotserver_degraded_loss_pct`**  | **弱网档进入门槛**<br>丢包 EWMA 达到该比例才进入弱网档。                     | **百分比** | 30 | **25 - 40** | 30% 属于持续严重丢包，普通可用线路不应触发。 |
-| **`lotserver_degraded_recover_pct`** | **弱网档恢复门槛**<br>丢包 EWMA 降到该比例后退出弱网档。                   | **百分比** | 20 | **10 - 25** | 与进入门槛形成回差，避免频繁切换。 |
-| **`lotserver_turbo`**              | **暴力模式 (Turbo)**<br>是否无视所有丢包信号。                           | **0 (关) / 1 (开)** | 0 | **建议 0** | 除非你在进行压力测试，否则不要开。开启后容易被运营商直接断流。 |
-| **`lotserver_safe_mode`**          | **zeta-tcp版本独有，安全熔断 (Safe Mode)**<br>是否在丢包率 >15% 时强制介入降速。              | **0 (关) / 1 (开)** | 1 | **建议 1** | 建议始终开启。这是防止 SSH 断连的最后一道防线。 |
-
-### 常用带宽换算表 (Bytes/sec)
-
-| 带宽 (Mbps) | 参数值 (Bytes/s) | 备注 |
-| :--- | :--- | :--- |
-| 10 Mbps | `1250000` | 适合作为 Start Rate |
-| 20 Mbps | `2500000` | |
-| 50 Mbps | `6250000` | 默认 Start Rate |
-| 100 Mbps | `12500000` | 常见的 VPS 上限 |
-| 200 Mbps | `25000000` | |
-| 500 Mbps | `62500000` | |
-| 1 Gbps | `125000000` | 默认 Global Rate |
-
-### test youtube (v3.1 version) 
-
->测试前提，服务器1Gbps，客户端100Mbps带宽
-
-<div align=center>
-    <img src="https://github.com/uk0/lotspeed/blob/main/v3.1.png" width="1024" height="768" />
-</div>
-
-
-### test youtube (zeta-tcp version)
-
->测试前提，服务器1Gbps，客户端100Mbps带宽，丢包率 5% ～ 16%
-
-<div align=center>
-    <img src="https://github.com/uk0/lotspeed/blob/main/zeta-tcp.png" width="1024" height="768" />
-</div>
-
-
-
-### changelog
-* 已经测试支持 `debian`,`ubunut` 5.x.x ,6.x.x 内核
-* 对抗丢包能力提升
-* 优化算法细节，提升稳定性
-
-
-[![Star History Chart](https://api.star-history.com/svg?repos=uk0/lotspeed&type=Date)](https://star-history.com/#uk0/lotspeed&Date)
+模块支持 Linux 4.9 及以上内核；Linux 4.19 及以上使用精确 TCP 字节计数，较旧内核使用数据段计数近似实际发送载荷。
