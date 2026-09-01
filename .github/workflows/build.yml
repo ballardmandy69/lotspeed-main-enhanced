@@ -11,10 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.8.3-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.8.3-enhanced"' install.sh
-          grep -q 'VERSION="3.8.3-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.8.4-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.8.4-enhanced"' install.sh
+          grep -q 'VERSION="3.8.4-enhanced"' lotspeedctl
           grep -q 'write_param lotserver_rate 32000000' lotspeedctl
           grep -q 'write_param lotserver_gain 30' lotspeedctl
           grep -q 'write_param lotserver_beta 820' lotspeedctl
@@ -22,6 +22,7 @@ jobs:
           grep -q 'LOTSPEED_GUARD_DOWN_MS 10000' lotspeed.c
           grep -q 'LOTSPEED_GUARD_SEVERE_DOWN_MS 2000' lotspeed.c
           grep -q 'LOTSPEED_GUARD_FAST_EFF_PCT 70' lotspeed.c
+          grep -q 'LOTSPEED_GUARD_LOW_RATE_MULTIPLIER 150' lotspeed.c
           grep -q 'LOTSPEED_GUARD_SEVERE_EFF_PCT 30' lotspeed.c
           grep -q 'LOTSPEED_GUARD_SEVERE_MIN_BYTES 262144' lotspeed.c
           grep -q 'LOTSPEED_GUARD_SEVERE_MIN_RETRANS 16' lotspeed.c
@@ -30,6 +31,8 @@ jobs:
           grep -q 'GUARD_LIMIT_50' lotspeed.c
           grep -q 'GUARD_LIMIT_30' lotspeed.c
           grep -q 'GUARD_PROBE_50' lotspeed.c
+          grep -q 'guard_delivery_rate' lotspeed.c
+          grep -q 'smoothed ACK delivery rate' lotspeed.c
           grep -q 'tx_bytes = lotspeed_tcp_tx_delta' lotspeed.c
           grep -q 'return tp->bytes_sent;' lotspeed.c
           ! grep -q 'bytes_sent + tp->bytes_retrans' lotspeed.c

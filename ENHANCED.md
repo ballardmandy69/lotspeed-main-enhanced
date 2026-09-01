@@ -1,13 +1,13 @@
-# LotSpeed 3.8.3 Enhanced
+# LotSpeed 3.8.4 Enhanced
 
-LotSpeed 3.8.3 returns healthy connections to the fixed-rate behavior of the
+LotSpeed 3.8.4 returns healthy connections to the fixed-rate behavior of the
 upstream `main` profile and adds one internal per-connection safeguard for
 long-lived TCP Mux traffic.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v383.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v384.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -26,7 +26,7 @@ The main profile is:
 | `lotserver_loss_guard` | `0` |
 | `lotserver_hd_enable` | `0` |
 
-In 3.8.3, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
+In 3.8.4, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
 Healthy flows retain the fixed `lotserver_rate`; they are not continuously
 adapted to measured bandwidth. Setting it to `0` disables the guard and gives
 the fixed upstream-main behavior.
@@ -42,15 +42,18 @@ a segment-counter approximation.
 | --- | ---: |
 | 80% or higher | 100% of `lotserver_rate` |
 | 50% through 79% | 70% of `lotserver_rate` |
-| 30% through 49% | 50% of `lotserver_rate` |
-| Below 30% | 30% of `lotserver_rate` |
+| 30% through 49% | `min(rate, 1.5 x smoothed delivery rate)` |
+| Below 30% | `min(rate, 1.5 x smoothed delivery rate)` |
 
-With the recommended 256 Mbps ceiling, the tiers are 256, 179.2, 128, and
-76.8 Mbps. The tier changes only the connection's target ceiling. CWND gain,
+With the recommended 256 Mbps ceiling, the first two tiers remain 256 and
+179.2 Mbps. Below 50%, the target follows 1.5 times the smoothed acknowledged
+delivery rate and never exceeds 256 Mbps. The estimate follows a falling rate
+immediately and rises with a 75% old / 25% new weighted update. CWND gain,
 loss beta, pacing gain, and minimum/maximum CWND remain the same.
 
-The configured target is not a strict shaper. With `pacing_gain=120`, a
-76.8 Mbps target permits an internal pacing rate up to 92.16 Mbps.
+The configured target is not a strict shaper. With `pacing_gain=120`, a target
+of 1.5 times delivery permits an internal pacing rate up to about 1.8 times
+delivery; 1.5 is the Lotspeed target ceiling.
 
 ## Transition rules
 
@@ -68,12 +71,14 @@ Recovery is deliberately faster:
 1. A limited tier must reach at least 85% efficiency for two seconds.
 2. The guard probes one tier higher for two seconds: 30%, 50%, 70%, then full.
 3. At least 80% efficiency keeps the full-rate probe; 50%-79% keeps the 70%
-   tier, 30%-49% keeps the 50% tier, and below 30% returns to the 30% tier.
+   tier. Below 50%, the target continues to follow 1.5 times the smoothed
+   acknowledged delivery rate.
 4. A failed probe waits 10 seconds before another upward probe.
 5. Short Mux pauses preserve evidence; only 30 seconds of idle time resets the
-   next active period to the full tier with fresh counters.
+   next active period to the full tier with fresh counters and clears the
+   smoothed delivery estimate.
 
-These constants are internal by design. Version 3.8.3 does not expose another
+These constants are internal by design. Version 3.8.4 does not expose another
 set of degraded-mode tuning parameters.
 
 ## Mux socket buffers
