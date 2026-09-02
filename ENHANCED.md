@@ -1,13 +1,13 @@
-# LotSpeed 3.9 Enhanced
+# LotSpeed 3.9.1 Enhanced
 
-LotSpeed 3.9 keeps the upstream `main` fixed-rate behavior for healthy TCP Mux
+LotSpeed 3.9.1 keeps the upstream `main` fixed-rate behavior for healthy TCP Mux
 connections and adds a cautious, per-connection efficiency guard for persistently
 wasteful flows.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v390.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v391.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -47,11 +47,14 @@ The first qualifying window moves only to `LIMIT_75`. A second qualifying
 five-second window moves to `LIMIT_DYNAMIC`, whose ceiling is calculated once:
 
 ```text
-clamp(five-second acknowledged delivery rate * 1.5, 100 Mbps, 192 Mbps)
+clamp(five-second acknowledged delivery rate * 2.0, 100 Mbps, 192 Mbps)
 ```
 
-That value is frozen until recovery. It never follows a lower delivery rate
-caused by its own limit, removing the recursive downshift behavior in 3.8.4.
+That value is frozen until recovery. Compared with the 1.5 multiplier in 3.9,
+the 2.0 multiplier preserves more sending headroom: an 80 Mbps acknowledged
+rate freezes at 160 Mbps instead of 120 Mbps. It never follows a lower delivery
+rate caused by its own limit, removing the recursive downshift behavior in
+3.8.4.
 
 ## Recovery
 

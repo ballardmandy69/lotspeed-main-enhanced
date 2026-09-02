@@ -1,4 +1,4 @@
-// lotspeed.c - v3.9 cautious per-flow efficiency guard
+// lotspeed.c - v3.9.1 cautious per-flow efficiency guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -46,7 +46,7 @@
 #define LOTSPEED_GUARD_RECOVER_EFF_PCT 80
 #define LOTSPEED_GUARD_MIN_BYTES 262144
 #define LOTSPEED_GUARD_MIN_RETRANS 16
-#define LOTSPEED_GUARD_DYNAMIC_MULTIPLIER 150
+#define LOTSPEED_GUARD_DYNAMIC_MULTIPLIER 200
 #define LOTSPEED_GUARD_DYNAMIC_FLOOR 12500000ULL
 #define LOTSPEED_GUARD_LIMIT_PCT 75
 #define LOTSPEED_GUARD_PROBE_MAX_RETRANS_PCT 20
@@ -1004,7 +1004,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.9 core: original fixed-rate behavior plus a cautious per-flow guard ---
+// --- v3.9.1 core: original fixed-rate behavior plus a cautious per-flow guard ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1405,7 +1405,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.9 - cautious per-flow guard              ║\n");
+    pr_info("║    LotSpeed v3.9.1 - cautious per-flow guard            ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1441,7 +1441,7 @@ static int __init lotspeed_module_init(void)
     pr_info("  Pacing Gain: %u%% | ProbeRTT: %ums/%ums/%u%% cwnd\n",
             lotserver_pacing_gain, lotserver_probe_rtt_interval_ms,
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
-    pr_info("  Guard Tiers: full | 75%% | frozen 1.5x delivery (100Mbps floor)\n");
+    pr_info("  Guard Tiers: full | 75%% | frozen 2.0x delivery (100Mbps floor)\n");
     pr_info("  Guard Timing: %ums initial | %ums recheck | %ums probe\n",
             LOTSPEED_GUARD_INITIAL_MS, LOTSPEED_GUARD_RECHECK_MS,
             LOTSPEED_GUARD_PROBE_MS);
@@ -1477,7 +1477,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.9 Unloaded                          ║\n");
+    pr_info("║        LotSpeed v3.9.1 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1493,6 +1493,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.9-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.9 - cautious per-flow efficiency guard");
+MODULE_VERSION("3.9.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.9.1 - cautious per-flow efficiency guard");
 MODULE_ALIAS("tcp_lotspeed");

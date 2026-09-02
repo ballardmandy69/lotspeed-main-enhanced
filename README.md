@@ -1,11 +1,11 @@
-# LotSpeed 3.9 Enhanced
+# LotSpeed 3.9.1 Enhanced
 
 本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。健康连接保留 upstream `main` 的固定速率表现；只有持续高速发送、效率低于 50% 且确实出现重传的单条 TCP，才会逐级降低目标上限。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v390.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v391.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -28,7 +28,7 @@ lotserver_hd_enable=0
 
 `adaptive=0` 完全关闭效率保护，固定使用 `lotserver_rate`。`adaptive=1` 只启用以下每连接保护，不会按带宽估计持续改变健康连接。
 
-## 3.9 状态机
+## 3.9.1 状态机
 
 ```text
 FULL             256 Mbps，pacing 120%
@@ -56,10 +56,10 @@ PROBE_FULL       探测 256 Mbps，pacing 120%
 第一次命中只从 `FULL` 降到 `LIMIT_75`。再经过一个完整 5 秒窗口仍满足相同条件，才进入 `LIMIT_DYNAMIC`。动态目标只在进入该状态时计算一次：
 
 ```text
-clamp(最近 5 秒 ACK 有效均速 × 1.5, 100 Mbps, 192 Mbps)
+clamp(最近 5 秒 ACK 有效均速 × 2.0, 100 Mbps, 192 Mbps)
 ```
 
-该目标随后冻结。限速造成 delivery rate 下降时不会再次递归降低，因此 3.8.4 中可能出现的“限速 -> 测得更低 -> 再限速”反馈环已经删除。对 256 Mbps 主配置，弱网硬地板为 100 Mbps。
+该目标随后冻结。相较 3.9 的 1.5 倍，2.0 倍会给弱网保留更多发送余量：例如 ACK 有效均速为 80 Mbps 时，冻结目标为 160 Mbps，而不是 120 Mbps。限速造成 delivery rate 下降时不会再次递归降低，因此 3.8.4 中可能出现的“限速 -> 测得更低 -> 再限速”反馈环已经删除。对 256 Mbps 主配置，弱网硬地板为 100 Mbps。
 
 ## 快速恢复
 
