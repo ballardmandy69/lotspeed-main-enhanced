@@ -1,18 +1,16 @@
-# LotSpeed 3.8.4 Enhanced
+# LotSpeed 3.9 Enhanced
 
-LotSpeed 3.8.4 returns healthy connections to the fixed-rate behavior of the
-upstream `main` profile and adds one internal per-connection safeguard for
-long-lived TCP Mux traffic.
+LotSpeed 3.9 keeps the upstream `main` fixed-rate behavior for healthy TCP Mux
+connections and adds a cautious, per-connection efficiency guard for persistently
+wasteful flows.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v384.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v390.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
-
-The main profile is:
 
 | Parameter | Value |
 | --- | ---: |
@@ -26,64 +24,61 @@ The main profile is:
 | `lotserver_loss_guard` | `0` |
 | `lotserver_hd_enable` | `0` |
 
-In 3.8.4, `lotserver_adaptive=1` enables only the per-flow efficiency guard.
-Healthy flows retain the fixed `lotserver_rate`; they are not continuously
-adapted to measured bandwidth. Setting it to `0` disables the guard and gives
-the fixed upstream-main behavior.
+Setting `lotserver_adaptive=0` disables the efficiency guard and restores the
+fixed upstream-main target. No additional module parameters are introduced.
 
-## Efficiency tiers
+## Guard states
 
-The guard compares TCP payload sent on the wire with newly acknowledged
-payload. On Linux 4.19 and newer, transmitted payload includes the kernel's
-byte counters for original and retransmitted data. Older supported kernels use
-a segment-counter approximation.
+| State | Target with the main profile | Pacing gain |
+| --- | ---: | ---: |
+| `FULL` | 256 Mbps | 120% |
+| `LIMIT_75` | 192 Mbps | 100% |
+| `LIMIT_DYNAMIC` | frozen 100-192 Mbps | 100% |
+| `PROBE_75` | 192 Mbps | 100% |
+| `PROBE_FULL` | 256 Mbps | 120% |
 
-| Ten-second delivery efficiency | Per-flow target ceiling |
-| --- | ---: |
-| 80% or higher | 100% of `lotserver_rate` |
-| 50% through 79% | 70% of `lotserver_rate` |
-| 30% through 49% | `min(rate, 1.5 x smoothed delivery rate)` |
-| Below 30% | `min(rate, 1.5 x smoothed delivery rate)` |
+A new transfer runs at full rate for a complete eight-second observation
+window. It can move down only when that window transmits at least 70% of the
+current target, is neither application-limited nor clearly receive-window
+limited, contains at least 256 KiB and 16 retransmitted segments, and delivers
+less than 50% of the transmitted TCP payload.
 
-With the recommended 256 Mbps ceiling, the first two tiers remain 256 and
-179.2 Mbps. Below 50%, the target follows 1.5 times the smoothed acknowledged
-delivery rate and never exceeds 256 Mbps. The estimate follows a falling rate
-immediately and rises with a 75% old / 25% new weighted update. CWND gain,
-loss beta, pacing gain, and minimum/maximum CWND remain the same.
+The first qualifying window moves only to `LIMIT_75`. A second qualifying
+five-second window moves to `LIMIT_DYNAMIC`, whose ceiling is calculated once:
 
-The configured target is not a strict shaper. With `pacing_gain=120`, a target
-of 1.5 times delivery permits an internal pacing rate up to about 1.8 times
-delivery; 1.5 is the Lotspeed target ceiling.
+```text
+clamp(five-second acknowledged delivery rate * 1.5, 100 Mbps, 192 Mbps)
+```
 
-## Transition rules
+That value is frozen until recovery. It never follows a lower delivery rate
+caused by its own limit, removing the recursive downshift behavior in 3.8.4.
 
-Normal downshifts require a complete 10-second active window. The connection
-must transmit at least 70% of its current target during that window.
-Receive-window-limited samples are discarded for the normal path. A flow below
-70% efficiency is fast-braked after a qualifying 2-second sample: 50%-70%
-enters the 70% tier, 30%-49% enters the 50% tier, and below 30% enters the 30%
-tier. The severe path can override the normal receive-window filter only when
-the sample contains at least 256 KB of transmitted data and 16 retransmitted
-segments. The 70%-79% middle range still uses the complete 10-second window.
+## Recovery
 
-Recovery is deliberately faster:
+Limited states reconsider recovery every five seconds. A qualifying recovery
+window requires at least 80% efficiency, retransmitted bytes no greater than
+20% of transmitted bytes, sustained activity, and no application or receive
+window limitation.
 
-1. A limited tier must reach at least 85% efficiency for two seconds.
-2. The guard probes one tier higher for two seconds: 30%, 50%, 70%, then full.
-3. At least 80% efficiency keeps the full-rate probe; 50%-79% keeps the 70%
-   tier. Below 50%, the target continues to follow 1.5 times the smoothed
-   acknowledged delivery rate.
-4. A failed probe waits 10 seconds before another upward probe.
-5. Short Mux pauses preserve evidence; only 30 seconds of idle time resets the
-   next active period to the full tier with fresh counters and clears the
-   smoothed delivery estimate.
+Recovery probes one step at a time:
 
-These constants are internal by design. Version 3.8.4 does not expose another
-set of degraded-mode tuning parameters.
+```text
+LIMIT_DYNAMIC -> PROBE_75 -> LIMIT_75
+LIMIT_75      -> PROBE_FULL -> FULL
+```
+
+Each probe lasts two seconds and must grow acknowledged delivery to at least
+the previous target. A failed probe immediately restores the prior ceiling;
+the next opportunity arrives after another five-second limited window. Thirty
+seconds of real idle time clears the state and starts the next transfer at
+`FULL`.
+
+RTT, jitter, isolated losses, and client IP addresses do not directly select a
+guard state. Each TCP connection is evaluated independently.
 
 ## Mux socket buffers
 
-`main-guarded`, `wan-enhanced`, `domestic-mixed`, and `mux-throughput` apply:
+The guarded main aliases apply:
 
 ```text
 net.core.rmem_max=16777216
@@ -94,9 +89,6 @@ net.ipv4.tcp_notsent_lowat=262144
 net.ipv4.tcp_limit_output_bytes=1048576
 ```
 
-These values bound autotuned socket buffers and local TCP output backlog. They
-do not cap sent-but-unacknowledged flight data or total memory for all sockets.
-
 ## Validation
 
 ```bash
@@ -106,4 +98,4 @@ lotspeed status
 sudo lotspeed logs 100
 ```
 
-Tier transitions are logged only when `lotserver_verbose=1`.
+Guard transitions are logged only when `lotserver_verbose=1`.

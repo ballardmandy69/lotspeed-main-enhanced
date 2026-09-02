@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.8.4 enhanced management utility
+# LotSpeed v3.9 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.8.4-enhanced"
+VERSION="3.9-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -159,7 +159,7 @@ apply_preset() {
 
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
-            # Original main behavior with a per-Mux efficiency rate ceiling.
+            # Original main behavior with a cautious per-Mux efficiency guard.
             write_param lotserver_rate 32000000
             write_param lotserver_gain 30
             write_param lotserver_beta 820
@@ -229,7 +229,7 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
-  main-guarded   - Original 256 Mbps main profile with per-Mux tiers
+  main-guarded   - Original 256 Mbps main profile with cautious per-Mux guard
   domestic-mixed - Alias for main-guarded
   mux-throughput - Alias for main-guarded
   ct-163-return - Overseas to China Telecom ordinary 163 route

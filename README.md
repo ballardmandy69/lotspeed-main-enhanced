@@ -1,23 +1,23 @@
-# LotSpeed 3.8.4 Enhanced
+# LotSpeed 3.9 Enhanced
 
-本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。正常连接恢复到经过验证的 upstream `main` 固定速率行为，只对持续发送效率很低的单条 MUX 降低目标速率上限。
+本版本面向“每位用户独立一条长连接 MUX TCP”的海外服务器回国流量。健康连接保留 upstream `main` 的固定速率表现；只有持续高速发送、效率低于 50% 且确实出现重传的单条 TCP，才会逐级降低目标上限。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v384.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v390.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
 
-`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 在 3.8.4 中均为该主预设的兼容别名。
+`wan-enhanced`、`domestic-mixed` 和 `mux-throughput` 均为 `main-guarded` 的兼容别名。
 
 ## 主配置
 
 ```text
 lotserver_rate=32000000       # 256 Mbps
 lotserver_gain=30             # 3.0x
-lotserver_beta=820            # 约保留80%
+lotserver_beta=820            # 约保留 80%
 lotserver_min_cwnd=32
 lotserver_max_cwnd=6000
 lotserver_adaptive=1
@@ -26,59 +26,53 @@ lotserver_loss_guard=0
 lotserver_hd_enable=0
 ```
 
-3.8.4 中 `lotserver_adaptive` 的语义已经收窄：
+`adaptive=0` 完全关闭效率保护，固定使用 `lotserver_rate`。`adaptive=1` 只启用以下每连接保护，不会按带宽估计持续改变健康连接。
+
+## 3.9 状态机
 
 ```text
-adaptive=0：固定使用 lotserver_rate，不做低效率分档
-adaptive=1：健康流仍固定使用 lotserver_rate，仅启用每连接效率保护
+FULL             256 Mbps，pacing 120%
+LIMIT_75         192 Mbps，pacing 100%
+LIMIT_DYNAMIC    冻结在 100～192 Mbps，pacing 100%
+PROBE_75         探测 192 Mbps，pacing 100%
+PROBE_FULL       探测 256 Mbps，pacing 120%
 ```
-
-RTT、Jitter 或单次丢包不会直接触发效率分档。
-
-## 四档目标上限
 
 内核按每条 TCP 分别统计：
 
 ```text
-实际发送 = 新发送TCP载荷 + 重传TCP载荷
-有效接收 = 对端新确认的ACK载荷
+实际发送 = TCP 发送字节（包含重传）
+有效接收 = 对端新确认的 ACK 字节
 发送效率 = 有效接收 / 实际发送
 ```
 
-普通降档需要持续发送达到当前目标至少 70%、并且没有被对端接收窗口限制的完整十秒窗口。若效率低于70%，并且已经满足发送量条件，3.8.4 会在约两秒后进入受限档：效率在50%～70%时进入70%目标档，30%～49%进入50%状态档，低于30%进入30%严重状态档。低于50%的两个状态都使用“平滑有效速率 × 1.5”的动态目标上限，并且不超过 `lotserver_rate`。至少发送256 KB且出现16个重传段的明显异常流可以覆盖普通接收窗口过滤。70%～79%的中等效率仍按完整十秒窗口判断。
+新连接必须先在 `FULL` 完整运行 8 秒，观察期内绝不降档。下降还必须同时满足：
 
-| 连续十秒发送效率 | 每连接目标上限 | 256 Mbps 配置下 |
-| --- | ---: | ---: |
-| `>= 80%` | `100% rate` | 256 Mbps |
-| `50%～79%` | `70% rate` | 179.2 Mbps |
-| `30%～49%` | `min(100% rate, 1.5×平滑有效速率)` | 例如有效速率102.4 Mbps时为153.6 Mbps |
-| `< 30%` | `min(100% rate, 1.5×平滑有效速率)` | 例如有效速率51.2 Mbps时为76.8 Mbps |
+- 窗口平均发送量达到当前目标的 70%
+- 发送量不少于 256 KiB，并出现至少 16 个重传段
+- 发送效率低于 50%
+- 当前不是应用供数不足，也不是明显的对端接收窗口限制
 
-分档只修改该连接的 `target_rate` 上限。平滑值在有效速率下降时立即跟随，恢复时按旧值75%与新采样25%加权上升，避免单次 ACK 突发把目标速率突然拉高。`gain=30`、`beta=820`、`cwnd=32..6000` 和 `pacing_gain=120%` 保持原版配置。
-
-目标速率不是严格整形。例如目标速率为有效速率的1.5倍时，配合 `pacing_gain=120%`，内部 pacing 上限约为有效速率的1.8倍；这里的1.5倍指 Lotspeed 的目标速率上限。
-
-## 降档与恢复
+第一次命中只从 `FULL` 降到 `LIMIT_75`。再经过一个完整 5 秒窗口仍满足相同条件，才进入 `LIMIT_DYNAMIC`。动态目标只在进入该状态时计算一次：
 
 ```text
-FULL -> LIMIT_70：连续十秒效率为50%～79%，或合格的两秒窗口效率为50%～70%
-FULL -> LIMIT_50：合格窗口效率为30%～49%
-FULL -> LIMIT_30：合格窗口效率低于30%（极端快速保护）
-LIMIT_70 -> LIMIT_50：连续十秒效率低于50%
-LIMIT_70/LIMIT_50 -> LIMIT_30：两秒窗口效率低于30%
+clamp(最近 5 秒 ACK 有效均速 × 1.5, 100 Mbps, 192 Mbps)
 ```
 
-恢复采用两秒一级的受控探测：
+该目标随后冻结。限速造成 delivery rate 下降时不会再次递归降低，因此 3.8.4 中可能出现的“限速 -> 测得更低 -> 再限速”反馈环已经删除。对 256 Mbps 主配置，弱网硬地板为 100 Mbps。
+
+## 快速恢复
+
+受限状态每 5 秒重新评估一次。效率达到 80%、重传字节不超过发送字节的 20%，并且连接持续满载时，才向上探测一级：
 
 ```text
-LIMIT_30 效率连续两秒 >=85% -> 探测 LIMIT_50
-LIMIT_50 效率连续两秒 >=85% -> 探测 LIMIT_70
-LIMIT_70 效率连续两秒 >=85% -> 探测 FULL
+LIMIT_DYNAMIC -> PROBE_75 -> LIMIT_75
+LIMIT_75      -> PROBE_FULL -> FULL
 ```
 
-探测持续两秒并逐级恢复。达到 80% 保持全速，50%～79%保持70%档；低于50%时仍按平滑有效速率的1.5倍运行。探测失败后冷却十秒，避免弱线路在动态目标和256 Mbps之间不断振荡。
+每次探测持续约 2 秒，并要求 ACK 有效速率至少达到探测前的目标。成功只升一级；失败立即回到原来的冻结档，经过下一个 5 秒窗口后可再次尝试。连续空闲 30 秒后清除旧证据，下次发送从 `FULL` 开始。
 
-短暂的 MUX 发送停顿保留效率证据，避免每次突发都重新开始观察。持续30秒没有有效负载后才清除旧档位和平滑速率估计，下次传输从FULL开始重新观察；MUX keepalive小包不会形成有效降档窗口。
+RTT、Jitter、单次丢包和 IP 地址本身都不会直接触发降档，也不会影响同一 IP 的其他 TCP 连接。
 
 ## MUX 内存配置
 
@@ -93,7 +87,7 @@ net.ipv4.tcp_notsent_lowat=262144
 net.ipv4.tcp_limit_output_bytes=1048576
 ```
 
-`tcp_notsent_lowat` 会对应用未发送队列施加背压，但不是单连接总内存硬上限。已经发送但尚未确认的数据、重传队列和 TCP 元数据仍会占用发送缓存。
+这些值限制自动调优缓冲区和本机未发送队列，但不是所有 TCP 内存的硬上限。
 
 ## 常用命令
 
@@ -104,16 +98,6 @@ sudo lotspeed logs 100
 sudo lotspeed preset main-guarded
 ```
 
-旧版本升级时，安装器会清理包含已删除 `degraded_*` 参数的旧 `/etc/modprobe.d/lotspeed.conf`，避免新模块因未知参数加载失败。
-
 如果 Secure Boot 开启并出现 `Key was rejected by service`，需要关闭 Secure Boot，或者使用已加入 MOK 的密钥签名 `lotspeed.ko`。这与拥塞控制算法本身无关。
 
-## 构建
-
-```bash
-git clone https://github.com/ballardmandy69/lotspeed-main-enhanced.git
-cd lotspeed-main-enhanced
-make
-```
-
-模块支持 Linux 4.9 及以上内核；Linux 4.19 及以上使用精确 TCP 字节计数，较旧内核使用数据段计数近似实际发送载荷。
+模块支持 Linux 4.9 及以上内核；Linux 4.19 及以上使用 TCP 字节计数，较旧内核使用数据段计数近似发送载荷。
