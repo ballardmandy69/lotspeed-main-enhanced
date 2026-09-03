@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.1 enhanced management utility
+# LotSpeed v3.10.2 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.1-enhanced"
+VERSION="3.10.2-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -169,17 +169,17 @@ apply_preset() {
             write_param lotserver_max_cwnd 10000
             write_param lotserver_adaptive 1
             set_common_safety
-            write_param lotserver_pacing_gain 105
+            write_param lotserver_pacing_gain 120
             write_param lotserver_probe_rtt_interval_ms 300000
             write_param lotserver_probe_rtt_duration_ms 100
             write_param lotserver_probe_rtt_cwnd_pct 75
             write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_rtt_tolerance_pct 100
+            write_param lotserver_rtt_tolerance_pct 120
             write_param lotserver_min_flight_ms 250
             write_param lotserver_avoid_hold_ms 250
-            write_param lotserver_loss_congest_pct 40
-            write_param lotserver_loss_recover_pct 30
-            write_param lotserver_rtt_confirm_samples 30
+            write_param lotserver_loss_congest_pct 50
+            write_param lotserver_loss_recover_pct 40
+            write_param lotserver_rtt_confirm_samples 40
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             configure_mux_buffers
@@ -342,8 +342,8 @@ show_rate_status() {
     pacing_gain="$(<"${PARAM_DIR}/lotserver_pacing_gain")"
     full_bps=$((rate * pacing_gain * 8 / 100))
     jitter_gain="${pacing_gain}"
-    if (( jitter_gain > 103 )); then
-        jitter_gain=103
+    if (( jitter_gain > 110 )); then
+        jitter_gain=110
     fi
     jitter_bps=$((rate * jitter_gain * 8 / 100))
     dynamic_min_bps=$((rate * min_rate_pct * 8 / 100))
@@ -351,7 +351,7 @@ show_rate_status() {
 
     printf "${cyan}LotSpeed adaptive rate summary${reset}\n"
     printf 'Current network namespace; established LotSpeed sockets only.\n'
-    printf 'Expected rates: FULL=%s, JITTERY=%s, ADAPTIVE=%s-%s bps\n\n' \
+    printf 'Expected rates: FULL_120=%s, JITTERY_110=%s, ADAPTIVE_100=%s-%s bps\n\n' \
         "${full_bps}" "${jitter_bps}" \
         "${dynamic_min_bps}" "${dynamic_max_bps}"
 
@@ -413,9 +413,9 @@ show_rate_status() {
                 active_other_count++
         }
         END {
-            printf "  %-24s %u\n", "ACTIVE_FULL", active_full_count + 0
-            printf "  %-24s %u\n", "ACTIVE_FULL/JITTERY", active_jitter_count + 0
-            printf "  %-24s %u\n", "ACTIVE_ADAPTIVE", active_dynamic_count + 0
+            printf "  %-24s %u\n", "ACTIVE_FULL_120", active_full_count + 0
+            printf "  %-24s %u\n", "ACTIVE_JITTERY_110", active_jitter_count + 0
+            printf "  %-24s %u\n", "ACTIVE_ADAPTIVE_100", active_dynamic_count + 0
             printf "  %-24s %u\n", "ACTIVE_OTHER", active_other_count + 0
             printf "  %-24s %u\n", "IDLE_OR_STALLED", idle_count + 0
             printf "  %-24s %u\n", "IDLE_ADAPTIVE_STALE", idle_dynamic_count + 0

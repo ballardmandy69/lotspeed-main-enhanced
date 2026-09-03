@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.1 strict congestion-gated Mux adaptive edition
+// lotspeed.c - v3.10.2 strict congestion-gated Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -41,6 +41,8 @@
 #define LOTSPEED_MUX_IDLE_RESET_MS 10000
 #define LOTSPEED_MUX_ACTIVE_PCT 10
 #define LOTSPEED_MUX_LOW_WINDOWS 2
+#define LOTSPEED_CONGEST_MIN_DELIVERED 32
+#define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -59,17 +61,17 @@ static unsigned int lotserver_beta = 871;              // about 85% cwnd retaine
 static bool lotserver_adaptive = true;
 static bool lotserver_turbo = false;
 static bool lotserver_verbose = false;
-static unsigned int lotserver_pacing_gain = 105;       // pacing rate percent
+static unsigned int lotserver_pacing_gain = 120;       // pacing rate percent
 static unsigned int lotserver_probe_rtt_interval_ms = 300000;
 static unsigned int lotserver_probe_rtt_duration_ms = 100;
 static unsigned int lotserver_probe_rtt_cwnd_pct = 75;
 static unsigned int lotserver_min_rtt_window_sec = 30;
-static unsigned int lotserver_rtt_tolerance_pct = 100;
+static unsigned int lotserver_rtt_tolerance_pct = 120;
 static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
-static unsigned int lotserver_loss_congest_pct = 40;
-static unsigned int lotserver_loss_recover_pct = 30;
-static unsigned int lotserver_rtt_confirm_samples = 30;
+static unsigned int lotserver_loss_congest_pct = 50;
+static unsigned int lotserver_loss_recover_pct = 40;
+static unsigned int lotserver_rtt_confirm_samples = 40;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
 static bool lotserver_hd_enable = false;
@@ -353,7 +355,7 @@ module_param(lotserver_verbose, bool, 0644);
 MODULE_PARM_DESC(lotserver_verbose, "Enable verbose logging");
 
 module_param_cb(lotserver_pacing_gain, &param_ops_percent, &lotserver_pacing_gain, 0644);
-MODULE_PARM_DESC(lotserver_pacing_gain, "Pacing gain percent (default 105)");
+MODULE_PARM_DESC(lotserver_pacing_gain, "Pacing gain percent (default 120)");
 
 module_param_cb(lotserver_probe_rtt_interval_ms, &param_ops_msec, &lotserver_probe_rtt_interval_ms, 0644);
 MODULE_PARM_DESC(lotserver_probe_rtt_interval_ms, "ProbeRTT interval in milliseconds");
@@ -439,7 +441,6 @@ struct lotspeed {
     u32 probe_prior_cwnd;
     u32 mux_activity_stamp;
     u32 next_rtt_delivered;
-    u32 round_lost;
     u32 round_stamp;
     u16 extra_acked;
     u8 state;
@@ -502,7 +503,6 @@ static void lotspeed_init(struct sock *sk)
     ca->mux_activity_stamp = tcp_jiffies32;
     ca->round_stamp = tcp_jiffies32;
     ca->next_rtt_delivered = tp->delivered;
-    ca->round_lost = tp->lost;
     ca->path_mode = PATH_STABLE;
     ca->target_rate = lotserver_rate;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
@@ -633,7 +633,8 @@ static bool lotspeed_rtt_inflated(const struct lotspeed *ca, u32 rtt_us)
 static void lotspeed_update_path_mode(struct sock *sk,
                                       u32 rtt_us,
                                       u32 delivered,
-                                      u32 losses)
+                                      u32 losses,
+                                      bool qualified)
 {
     struct lotspeed *ca = inet_csk_ca(sk);
     u64 total_packets;
@@ -644,6 +645,9 @@ static void lotspeed_update_path_mode(struct sock *sk,
     u8 old_mode = ca->path_mode;
     u8 decay = 2;
     bool raw_inflated = lotspeed_rtt_inflated(ca, rtt_us);
+
+    if (!qualified)
+        return;
 
     if (lotserver_adaptive && ca->path_mode == PATH_CONGESTED)
         decay = 8;
@@ -808,6 +812,8 @@ static bool lotspeed_update_round_model(struct sock *sk,
     u32 now = tcp_jiffies32;
     u32 delivered;
     u32 losses;
+    u32 path_delivered;
+    bool qualified_round;
     u32 elapsed_jiffies;
     u64 elapsed_us;
     u64 delivered_bytes;
@@ -818,12 +824,11 @@ static bool lotspeed_update_round_model(struct sock *sk,
         return false;
 
     delivered = tp->delivered - ca->next_rtt_delivered;
-    losses = tp->lost - ca->round_lost;
+    losses = rs->losses > 0 ? rs->losses : 0;
     elapsed_jiffies = now - ca->round_stamp;
     elapsed_us = jiffies_to_usecs(elapsed_jiffies);
 
     ca->next_rtt_delivered = tp->delivered;
-    ca->round_lost = tp->lost;
     ca->round_stamp = now;
 
     if (delivered && elapsed_us) {
@@ -857,11 +862,17 @@ static bool lotspeed_update_round_model(struct sock *sk,
         ca->extra_acked = ca->extra_acked * 7 / 8;
     }
 
-    lotspeed_update_path_mode(sk, path_rtt, delivered, losses);
+    path_delivered = rs->delivered > 0 ? (u32)rs->delivered : 0;
+    qualified_round = !rs->is_app_limited &&
+                      path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
+                      rs->interval_us > 0 &&
+                      rs->interval_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+    lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
+                              qualified_round);
     return true;
 }
 
-// --- v3.10.1 core: strict congestion-gated adaptive rate with Mux reset ---
+// --- v3.10.2 core: qualified congestion adaptation with Mux reset ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -881,8 +892,9 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     u32 pipe;
     u64 adaptive_floor;
     bool congestion_detected = false;
-    bool rtt_inflated;
     bool high_delay_path;
+
+    (void)flag;
 
     if (rs && rs->rtt_us > 0) {
         rtt_us = (u32)min_t(unsigned long, rs->rtt_us,
@@ -898,21 +910,15 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
 
     lotspeed_update_round_model(sk, rs, mss, path_rtt);
     lotspeed_update_mux_activity(sk, mss, now);
-    rtt_inflated = ca->path_mode == PATH_CONGESTED;
     adaptive_floor = lotspeed_adaptive_floor();
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
 
-    if (!lotserver_turbo) {
-        if (flag & CA_ACK_ECE)
-            congestion_detected = true;
-        if (rtt_inflated)
-            congestion_detected = true;
-        if (rs && rs->losses > 0 &&
-            (!lotserver_loss_guard || rtt_inflated))
-            congestion_detected = true;
-    }
+    /* Only the qualified EWMA/RTT classifier may lower the target rate. */
+    if (!lotserver_turbo && lotserver_adaptive &&
+        ca->path_mode == PATH_CONGESTED)
+        congestion_detected = true;
 
     if (ca->state != PROBE_RTT && ca->rtt_min > 0 &&
         time_after32(now, ca->probe_rtt_ts +
@@ -1092,7 +1098,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
     pacing_gain = lotserver_pacing_gain;
     if (ca->path_mode == PATH_JITTERY)
-        pacing_gain = min_t(u32, pacing_gain, 103);
+        pacing_gain = min_t(u32, pacing_gain, 110);
     else if (ca->path_mode == PATH_CONGESTED)
         pacing_gain = min_t(u32, pacing_gain, 100);
     pacing_rate = lotspeed_scale_percent(target_rate, pacing_gain);
@@ -1223,7 +1229,6 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
             ca->ss_mode = true;
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
-            ca->round_lost = tp->lost;
             ca->extra_acked = 0;
             break;
 
@@ -1236,7 +1241,6 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
             }
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
-            ca->round_lost = tp->lost;
             ca->extra_acked = 0;
             break;
 
@@ -1281,7 +1285,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.1 - strict adaptive Mux             ║\n");
+    pr_info("║    LotSpeed v3.10.2 - strict adaptive Mux             ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1354,7 +1358,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.1 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.2 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1370,6 +1374,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.1-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.1 - strict adaptive Mux with 60% floor");
+MODULE_VERSION("3.10.2-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.2 - strict adaptive Mux with qualified congestion");
 MODULE_ALIAS("tcp_lotspeed");

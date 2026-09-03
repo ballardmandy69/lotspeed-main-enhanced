@@ -1,11 +1,11 @@
-# LotSpeed 3.10.1 Enhanced
+# LotSpeed 3.10.2 Enhanced
 
-本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限改为上限的 60%，并为长期复用的 MUX TCP 增加低流量历史重置。单次 RTO 不再直接进入 adapt，只有持续严重拥塞才会降低目标速率。
+本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限改为上限的 60%，并为长期复用的 MUX TCP 增加低流量历史重置。正常 pacing 为 120%，Jitter 为 110%，只有持续严重拥塞才降到 100%。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3101.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3102.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -20,12 +20,12 @@ lotserver_beta=871               # 拥塞时保留约 85%
 lotserver_min_cwnd=32
 lotserver_max_cwnd=10000
 lotserver_adaptive=1
-lotserver_pacing_gain=105
+lotserver_pacing_gain=120
 lotserver_min_flight_ms=250
-lotserver_rtt_tolerance_pct=100
-lotserver_loss_congest_pct=40
-lotserver_loss_recover_pct=30
-lotserver_rtt_confirm_samples=30
+lotserver_rtt_tolerance_pct=120
+lotserver_loss_congest_pct=50
+lotserver_loss_recover_pct=40
+lotserver_rtt_confirm_samples=40
 lotserver_loss_guard=1
 lotserver_noncong_beta=1000
 lotserver_hd_enable=0
@@ -45,15 +45,21 @@ lotserver_hd_enable=0
                  256 Mbps)
 ```
 
-触发条件比 3.6.4 `mux-throughput` 更严格：
+只有满足以下条件的 ACK 采样才参与拥塞分类：
+
+- 非 `app_limited`
+- 当前采样至少确认 32 个 delivered packets
+- 采样区间不超过 2 秒
+
+在合格采样上，触发条件比 3.6.4 `mux-throughput` 更严格：
 
 ```text
-丢包 EWMA >= 40%
+丢包 EWMA >= 50%
 或
-RTT 相对基线膨胀超过 100%，持续 30 个轮次，且丢包 EWMA >= 30%
+RTT 相对基线膨胀超过 120%，持续 40 个轮次，且丢包 EWMA >= 40%
 ```
 
-单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 256 Mbps 目标。默认主配置的动态范围是 153.6～256 Mbps；如果把上限设置为 416 Mbps，下限会自动变为 249.6 Mbps。
+`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认严重拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 256 Mbps 目标。默认主配置的动态范围是 153.6～256 Mbps；如果把上限设置为 416 Mbps，下限会自动变为 249.6 Mbps。
 
 ## MUX 低流量重置
 
@@ -73,7 +79,7 @@ RTT 相对基线膨胀超过 100%，持续 30 个轮次，且丢包 EWMA >= 30%
 sudo lotspeed rate-status
 ```
 
-该命令只扫描当前网络命名空间的已建立 LotSpeed 连接。最近 10 秒发送过数据的连接分别统计为 `ACTIVE_FULL`、`ACTIVE_FULL/JITTERY` 和 `ACTIVE_ADAPTIVE`；空闲或停滞连接及其旧 adaptive pacing 单独列出。`guard-status` 保留为兼容别名。
+该命令只扫描当前网络命名空间的已建立 LotSpeed 连接。最近 10 秒发送过数据的连接分别统计为 `ACTIVE_FULL_120`、`ACTIVE_JITTERY_110` 和 `ACTIVE_ADAPTIVE_100`；空闲或停滞连接及其旧 adaptive pacing 单独列出。`guard-status` 保留为兼容别名。
 
 ## MUX 内存配置
 

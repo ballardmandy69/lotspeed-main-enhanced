@@ -1,14 +1,14 @@
-# LotSpeed 3.10.1 Enhanced
+# LotSpeed 3.10.2 Enhanced
 
-LotSpeed 3.10.1 restores the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.2 restores the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
-requires sustained severe congestion before adapting, and it clears stale
-per-connection learning after sustained low Mux traffic.
+requires qualified sustained severe congestion before adapting, and it clears
+stale per-connection learning after sustained low Mux traffic.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3101.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3102.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -24,30 +24,34 @@ lotspeed status
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `10000` packets |
 | `lotserver_adaptive` | `1` |
-| `lotserver_pacing_gain` | `105` percent |
+| `lotserver_pacing_gain` | `120` percent |
 | `lotserver_min_flight_ms` | `250` ms |
-| `lotserver_rtt_tolerance_pct` | `100` percent |
-| `lotserver_loss_congest_pct` | `40` percent |
-| `lotserver_loss_recover_pct` | `30` percent |
-| `lotserver_rtt_confirm_samples` | `30` rounds |
+| `lotserver_rtt_tolerance_pct` | `120` percent |
+| `lotserver_loss_congest_pct` | `50` percent |
+| `lotserver_loss_recover_pct` | `40` percent |
+| `lotserver_rtt_confirm_samples` | `40` rounds |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
 | `lotserver_hd_enable` | `0` |
 
 ## Dynamic rate
 
-Outside congestion avoidance, the target remains 256 Mbps. During confirmed
-congestion it becomes:
+Outside congestion avoidance, the target remains 256 Mbps. Stable paths use
+120% pacing, jittery paths use at most 110% pacing, and confirmed congested
+paths use 100% pacing. During confirmed congestion the target becomes:
 
 ```text
 clamp(smoothed ACK arrival rate * 1.05, rate * 60%, rate)
 ```
 
 The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
-sample. Adaptation requires a 40% loss EWMA, or 30 rounds above twice the base
-RTT with at least 30% loss EWMA. A single RTO still reduces cwnd but cannot
-lower the target rate by itself. Once congestion clears for 250 ms, the target
-returns to the configured ceiling.
+sample. Only a non-`app_limited` sample with at least 32 delivered packets and
+an interval no longer than two seconds can update the congestion classifier.
+Adaptation requires a 50% loss EWMA, or 40 qualified rounds above the RTT
+threshold with at least 40% loss EWMA. The RTT threshold is the measured base
+RTT plus 120% and a jitter allowance. A single RTO still reduces cwnd but
+cannot lower the target rate by itself. Once congestion clears for 250 ms, the
+target returns to the configured ceiling.
 
 ## Low-traffic reset
 
@@ -68,7 +72,8 @@ sudo lotspeed rate-status
 ```
 
 This on-demand command separates sockets that transmitted during the last ten
-seconds into `ACTIVE_FULL`, `ACTIVE_FULL/JITTERY`, and `ACTIVE_ADAPTIVE`.
+seconds into `ACTIVE_FULL_120`, `ACTIVE_JITTERY_110`, and
+`ACTIVE_ADAPTIVE_100`.
 Idle or stalled sockets, including stale adaptive pacing values, are shown
 separately. `guard-status` remains as a compatibility alias.
 
