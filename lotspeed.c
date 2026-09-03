@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10 congestion-gated Mux adaptive edition
+// lotspeed.c - v3.10.1 strict congestion-gated Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -51,7 +51,7 @@
 
 // --- 可调参数 ---
 static unsigned long lotserver_rate = 32000000ULL;   // 256Mbps per-flow ceiling
-static unsigned long lotserver_min_rate = 21000000ULL; // 168Mbps adaptive floor
+static unsigned int lotserver_min_rate_pct = 60;     // percent of rate ceiling
 static unsigned int lotserver_gain = 30;               // 3.0x default gain
 static unsigned int lotserver_min_cwnd = 32;           // 最小拥塞窗口
 static unsigned int lotserver_max_cwnd = 10000;        // 最大拥塞窗口
@@ -64,12 +64,12 @@ static unsigned int lotserver_probe_rtt_interval_ms = 300000;
 static unsigned int lotserver_probe_rtt_duration_ms = 100;
 static unsigned int lotserver_probe_rtt_cwnd_pct = 75;
 static unsigned int lotserver_min_rtt_window_sec = 30;
-static unsigned int lotserver_rtt_tolerance_pct = 80;
+static unsigned int lotserver_rtt_tolerance_pct = 100;
 static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
-static unsigned int lotserver_loss_congest_pct = 30;
-static unsigned int lotserver_loss_recover_pct = 25;
-static unsigned int lotserver_rtt_confirm_samples = 20;
+static unsigned int lotserver_loss_congest_pct = 40;
+static unsigned int lotserver_loss_recover_pct = 30;
+static unsigned int lotserver_rtt_confirm_samples = 30;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
 static bool lotserver_hd_enable = false;
@@ -191,19 +191,14 @@ static int param_set_beta(const char *val, const struct kernel_param *kp)
     return ret;
 }
 
-static int param_set_min_rate(const char *val,
-                              const struct kernel_param *kp)
+static int param_set_floor_percent(const char *val,
+                                   const struct kernel_param *kp)
 {
-    unsigned long old_val = lotserver_min_rate;
-    int ret = param_set_ulong(val, kp);
+    int ret = param_set_uint(val, kp);
+    unsigned int *value = kp->arg;
 
     if (!ret)
-        lotserver_min_rate = clamp_t(unsigned long, lotserver_min_rate,
-                                     125000, LOTSPEED_MAX_RATE);
-
-    if (!ret && old_val != lotserver_min_rate && lotserver_verbose)
-        pr_info("lotspeed: [uk0@%s] min_rate changed: %lu -> %lu bytes/s\n",
-                CURRENT_TIMESTAMP, old_val, lotserver_min_rate);
+        *value = clamp_t(unsigned int, *value, 1, 100);
     return ret;
 }
 
@@ -309,7 +304,7 @@ static int param_set_seconds(const char *val, const struct kernel_param *kp)
 }
 
 static const struct kernel_param_ops param_ops_rate = { .set = param_set_rate, .get = param_get_ulong, };
-static const struct kernel_param_ops param_ops_min_rate = { .set = param_set_min_rate, .get = param_get_ulong, };
+static const struct kernel_param_ops param_ops_floor_percent = { .set = param_set_floor_percent, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_gain = { .set = param_set_gain, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_min_cwnd = { .set = param_set_min_cwnd, .get = param_get_uint, };
 static const struct kernel_param_ops param_ops_max_cwnd = { .set = param_set_max_cwnd, .get = param_get_uint, };
@@ -330,10 +325,10 @@ static const struct kernel_param_ops param_ops_seconds = { .set = param_set_seco
 module_param_cb(lotserver_rate, &param_ops_rate, &lotserver_rate, 0644);
 MODULE_PARM_DESC(lotserver_rate, "Target rate in bytes/sec (default 256Mbps)");
 
-module_param_cb(lotserver_min_rate, &param_ops_min_rate,
-                &lotserver_min_rate, 0644);
-MODULE_PARM_DESC(lotserver_min_rate,
-                 "Minimum congestion-adaptive rate in bytes/sec");
+module_param_cb(lotserver_min_rate_pct, &param_ops_floor_percent,
+                &lotserver_min_rate_pct, 0644);
+MODULE_PARM_DESC(lotserver_min_rate_pct,
+                 "Minimum adaptive rate as percent of rate ceiling");
 
 module_param_cb(lotserver_gain, &param_ops_gain, &lotserver_gain, 0644);
 MODULE_PARM_DESC(lotserver_gain, "Gain multiplier x10 (default 30 = 3.0x)");
@@ -710,7 +705,10 @@ static u64 lotspeed_scale_percent(u64 value, u32 percent)
 
 static u64 lotspeed_adaptive_floor(void)
 {
-    return min_t(u64, lotserver_min_rate, lotserver_rate);
+    return max_t(u64,
+                 lotspeed_scale_percent(lotserver_rate,
+                                         lotserver_min_rate_pct),
+                 125000);
 }
 
 static u64 lotspeed_tcp_tx_counter(const struct tcp_sock *tp)
@@ -863,7 +861,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10 core: v3.6.4 congestion-gated adaptive rate with Mux reset ---
+// --- v3.10.1 core: strict congestion-gated adaptive rate with Mux reset ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1175,7 +1173,9 @@ static void lotspeed_set_state_hook(struct sock *sk, u8 new_state)
                 }
                 return;
             }
-            enter_state(sk, AVOIDING);
+            /* A single RTO still reduces cwnd, but cannot lower the rate. */
+            if (ca->path_mode == PATH_CONGESTED)
+                enter_state(sk, AVOIDING);
 
             if (lotserver_verbose &&
                 (tp->total_retrans == 1 || tp->total_retrans % 10 == 0))
@@ -1281,7 +1281,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10 - congestion-adaptive Mux           ║\n");
+    pr_info("║    LotSpeed v3.10.1 - strict adaptive Mux             ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1317,8 +1317,8 @@ static int __init lotspeed_module_init(void)
     pr_info("  Pacing Gain: %u%% | ProbeRTT: %ums/%ums/%u%% cwnd\n",
             lotserver_pacing_gain, lotserver_probe_rtt_interval_ms,
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
-    pr_info("  Adaptive Range: %lu-%lu bytes/s\n",
-            min(lotserver_min_rate, lotserver_rate), lotserver_rate);
+    pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
+            lotserver_min_rate_pct);
     pr_info("  Mux Reset: %u low windows of %ums below %u%% load\n",
             LOTSPEED_MUX_LOW_WINDOWS, LOTSPEED_MUX_WINDOW_MS,
             LOTSPEED_MUX_ACTIVE_PCT);
@@ -1354,7 +1354,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10 Unloaded                         ║\n");
+    pr_info("║        LotSpeed v3.10.1 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1370,6 +1370,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10 - v3.6.4 dynamic Mux with low-flow reset");
+MODULE_VERSION("3.10.1-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.1 - strict adaptive Mux with 60% floor");
 MODULE_ALIAS("tcp_lotspeed");

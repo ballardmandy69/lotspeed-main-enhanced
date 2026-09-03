@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10 enhanced management utility
+# LotSpeed v3.10.1 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10-enhanced"
+VERSION="3.10.1-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -129,7 +129,7 @@ apply_preset() {
     local preset="${1:-}"
     local enhanced_parameters=(
         lotserver_rate
-        lotserver_min_rate
+        lotserver_min_rate_pct
         lotserver_gain
         lotserver_beta
         lotserver_min_cwnd
@@ -160,9 +160,9 @@ apply_preset() {
 
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
-            # v3.6.4 Mux profile with a precise adaptive floor and idle reset.
+            # Strict v3.6.4 Mux profile with a proportional adaptive floor.
             write_param lotserver_rate 32000000
-            write_param lotserver_min_rate 21000000
+            write_param lotserver_min_rate_pct 60
             write_param lotserver_gain 30
             write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
@@ -174,12 +174,12 @@ apply_preset() {
             write_param lotserver_probe_rtt_duration_ms 100
             write_param lotserver_probe_rtt_cwnd_pct 75
             write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_rtt_tolerance_pct 80
+            write_param lotserver_rtt_tolerance_pct 100
             write_param lotserver_min_flight_ms 250
             write_param lotserver_avoid_hold_ms 250
-            write_param lotserver_loss_congest_pct 30
-            write_param lotserver_loss_recover_pct 25
-            write_param lotserver_rtt_confirm_samples 20
+            write_param lotserver_loss_congest_pct 40
+            write_param lotserver_loss_recover_pct 30
+            write_param lotserver_rtt_confirm_samples 30
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             configure_mux_buffers
@@ -187,7 +187,7 @@ apply_preset() {
         ct-163-return|ct-return)
             # Overseas server to China Telecom over ordinary 163 routes.
             write_param lotserver_rate 31250000
-            write_param lotserver_min_rate 21000000
+            write_param lotserver_min_rate_pct 60
             write_param lotserver_gain 20
             write_param lotserver_beta 768
             write_param lotserver_min_cwnd 32
@@ -208,7 +208,7 @@ apply_preset() {
             ;;
         conservative)
             write_param lotserver_rate 125000000
-            write_param lotserver_min_rate 93750000
+            write_param lotserver_min_rate_pct 75
             write_param lotserver_gain 15
             write_param lotserver_beta 717
             write_param lotserver_min_cwnd 16
@@ -218,7 +218,7 @@ apply_preset() {
             ;;
         balanced)
             write_param lotserver_rate 625000000
-            write_param lotserver_min_rate 468750000
+            write_param lotserver_min_rate_pct 75
             write_param lotserver_gain 20
             write_param lotserver_beta 717
             write_param lotserver_min_cwnd 16
@@ -228,7 +228,7 @@ apply_preset() {
             ;;
         aggressive)
             write_param lotserver_rate 1250000000
-            write_param lotserver_min_rate 937500000
+            write_param lotserver_min_rate_pct 75
             write_param lotserver_gain 30
             write_param lotserver_beta 819
             write_param lotserver_min_cwnd 32
@@ -238,7 +238,7 @@ apply_preset() {
             ;;
         fixed-1g)
             write_param lotserver_rate 125000000
-            write_param lotserver_min_rate 125000000
+            write_param lotserver_min_rate_pct 100
             write_param lotserver_gain 30
             write_param lotserver_beta 820
             write_param lotserver_min_cwnd 32
@@ -249,7 +249,7 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
-  mux-throughput - v3.6.4 Mux control, adaptive 168-256 Mbps
+  mux-throughput - Strict Mux control, adaptive floor at 60% of rate
   main-guarded   - Alias for mux-throughput
   domestic-mixed - Alias for mux-throughput
   ct-163-return - Overseas to China Telecom ordinary 163 route
@@ -308,9 +308,12 @@ show_status() {
     while IFS= read -r name; do
         value="$(<"${PARAM_DIR}/${name}")"
         case "${name}" in
-            lotserver_rate|lotserver_min_rate)
+            lotserver_rate)
                 printf '  %-32s %s bytes/s (%s Mbps)\n' \
                     "${name}" "${value}" "$((value * 8 / 1000000))"
+                ;;
+            lotserver_min_rate_pct)
+                printf '  %-32s %s%% of rate\n' "${name}" "${value}"
                 ;;
             lotserver_gain)
                 printf '  %-32s %s (%d.%dx cwnd gain)\n' \
@@ -328,14 +331,14 @@ show_status() {
 }
 
 show_rate_status() {
-    local rate min_rate pacing_gain jitter_gain
+    local rate min_rate_pct pacing_gain jitter_gain
     local full_bps jitter_bps dynamic_min_bps dynamic_max_bps
 
     require_loaded
     command -v ss >/dev/null 2>&1 || fail "ss command not found."
 
     rate="$(<"${PARAM_DIR}/lotserver_rate")"
-    min_rate="$(<"${PARAM_DIR}/lotserver_min_rate")"
+    min_rate_pct="$(<"${PARAM_DIR}/lotserver_min_rate_pct")"
     pacing_gain="$(<"${PARAM_DIR}/lotserver_pacing_gain")"
     full_bps=$((rate * pacing_gain * 8 / 100))
     jitter_gain="${pacing_gain}"
@@ -343,7 +346,7 @@ show_rate_status() {
         jitter_gain=103
     fi
     jitter_bps=$((rate * jitter_gain * 8 / 100))
-    dynamic_min_bps=$((min_rate * 8))
+    dynamic_min_bps=$((rate * min_rate_pct * 8 / 100))
     dynamic_max_bps=$((rate * 8))
 
     printf "${cyan}LotSpeed adaptive rate summary${reset}\n"
@@ -374,34 +377,48 @@ show_rate_status() {
             return text + 0
         }
         function close_to(value, target) {
-            return target > 0 && value >= target * 0.98 &&
-                   value <= target * 1.02
+            return target > 0 && value >= target * 0.995 &&
+                   value <= target * 1.005
         }
         /lotspeed/ {
             pacing = 0
+            lastsnd = -1
             for (i = 1; i <= NF; i++) {
                 if ($i == "pacing_rate" && i < NF) {
                     pacing = rate_value($(i + 1))
-                    break
+                } else if ($i ~ /^lastsnd:[0-9]+$/) {
+                    split($i, item, ":")
+                    lastsnd = item[2] + 0
                 }
             }
 
             total++
+            active = lastsnd >= 0 && lastsnd <= 10000
+            if (!active) {
+                idle_count++
+                if (pacing >= dynamic_min * 0.995 &&
+                    pacing <= dynamic_max * 1.005)
+                    idle_dynamic_count++
+                next
+            }
+
             if (close_to(pacing, full))
-                full_count++
+                active_full_count++
             else if (close_to(pacing, jitter))
-                jitter_count++
-            else if (pacing >= dynamic_min * 0.98 &&
-                     pacing <= dynamic_max * 1.02)
-                dynamic_count++
+                active_jitter_count++
+            else if (pacing >= dynamic_min * 0.995 &&
+                     pacing <= dynamic_max * 1.005)
+                active_dynamic_count++
             else
-                other_count++
+                active_other_count++
         }
         END {
-            printf "  %-24s %u\n", "FULL", full_count + 0
-            printf "  %-24s %u\n", "FULL/JITTERY", jitter_count + 0
-            printf "  %-24s %u\n", "ADAPTIVE_168_256M", dynamic_count + 0
-            printf "  %-24s %u\n", "OTHER/UNKNOWN", other_count + 0
+            printf "  %-24s %u\n", "ACTIVE_FULL", active_full_count + 0
+            printf "  %-24s %u\n", "ACTIVE_FULL/JITTERY", active_jitter_count + 0
+            printf "  %-24s %u\n", "ACTIVE_ADAPTIVE", active_dynamic_count + 0
+            printf "  %-24s %u\n", "ACTIVE_OTHER", active_other_count + 0
+            printf "  %-24s %u\n", "IDLE_OR_STALLED", idle_count + 0
+            printf "  %-24s %u\n", "IDLE_ADAPTIVE_STALE", idle_dynamic_count + 0
             printf "  %-24s %u\n", "TOTAL", total + 0
         }'
 }
