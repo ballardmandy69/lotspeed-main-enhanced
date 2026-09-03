@@ -1,13 +1,13 @@
-# LotSpeed 3.9.2 Enhanced
+# LotSpeed 3.9.3 Enhanced
 
-LotSpeed 3.9.2 keeps the upstream `main` fixed-rate behavior for healthy and
+LotSpeed 3.9.3 keeps the upstream `main` fixed-rate behavior for healthy and
 short-lived TCP Mux connections. Its per-connection guard limits only sustained,
 high-rate flows with severe retransmission overhead.
 
 ## Recommended profile
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v392.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v393.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -51,9 +51,10 @@ a guard tier.
 
 ## Qualification and limiting
 
-A flow must transmit at least 70% of its current target for six consecutive
+A flow must transmit at least 10% of its current target for six consecutive
 five-second windows before it is eligible. This gives every new transfer 30
-seconds at the original full rate.
+seconds at the original full rate. With the default profile, the activity
+thresholds are 25.6, 19.2, and 10 Mbps in the three respective tiers.
 
 An eligible flow moves from `FULL` to `LIMIT_75` only after two consecutive
 active windows have a wire ratio of at least 1.8. Two more consecutive severe

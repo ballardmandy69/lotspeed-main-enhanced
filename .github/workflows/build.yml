@@ -11,15 +11,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.9.2-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.9.2-enhanced"' install.sh
-          grep -q 'VERSION="3.9.2-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.9.3-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.9.3-enhanced"' install.sh
+          grep -q 'VERSION="3.9.3-enhanced"' lotspeedctl
           grep -q 'write_param lotserver_rate 32000000' lotspeedctl
           grep -q 'write_param lotserver_gain 30' lotspeedctl
           grep -q 'write_param lotserver_beta 820' lotspeedctl
           grep -q 'write_param lotserver_max_cwnd 6000' lotspeedctl
           grep -q 'LOTSPEED_GUARD_WINDOW_MS 5000' lotspeed.c
+          grep -q 'LOTSPEED_GUARD_ACTIVE_PCT 10' lotspeed.c
           grep -q 'LOTSPEED_GUARD_LONG_WINDOWS 6' lotspeed.c
           grep -q 'LOTSPEED_GUARD_BAD_WINDOWS 2' lotspeed.c
           grep -q 'LOTSPEED_GUARD_FORCE_PROBE_WINDOWS 5' lotspeed.c

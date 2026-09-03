@@ -1,4 +1,4 @@
-// lotspeed.c - v3.9.2 strict per-flow retransmission guard
+// lotspeed.c - v3.9.3 strict per-flow retransmission guard
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -39,7 +39,7 @@
 #define LOTSPEED_ACK_EXTRA_MAX_US 100000
 #define LOTSPEED_GUARD_WINDOW_MS 5000
 #define LOTSPEED_GUARD_IDLE_RESET_MS 10000
-#define LOTSPEED_GUARD_ACTIVE_PCT 70
+#define LOTSPEED_GUARD_ACTIVE_PCT 10
 #define LOTSPEED_GUARD_MIN_BYTES 262144
 #define LOTSPEED_GUARD_LONG_WINDOWS 6
 #define LOTSPEED_GUARD_BAD_WINDOWS 2
@@ -1067,7 +1067,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.9.2 core: original fixed-rate behavior plus a strict per-flow guard ---
+// --- v3.9.3 core: original fixed-rate behavior plus a strict per-flow guard ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1464,7 +1464,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.9.2 - strict retransmission guard       ║\n");
+    pr_info("║    LotSpeed v3.9.3 - strict retransmission guard       ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1541,7 +1541,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.9.2 Unloaded                        ║\n");
+    pr_info("║        LotSpeed v3.9.3 Unloaded                        ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1557,6 +1557,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.9.2-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.9.2 - strict per-flow retransmission guard");
+MODULE_VERSION("3.9.3-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.9.3 - strict per-flow retransmission guard");
 MODULE_ALIAS("tcp_lotspeed");

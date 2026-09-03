@@ -1,11 +1,11 @@
-# LotSpeed 3.9.2 Enhanced
+# LotSpeed 3.9.3 Enhanced
 
 本版本面向“每位用户独立一条长期复用 MUX TCP”的海外服务器回国流量。健康连接和短流保留 upstream `main` 的固定速率行为；只有持续高速至少 30 秒、并连续出现严重重传浪费的单条长连接，才会降低目标上限。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v392.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v393.sh | sudo bash
 sudo lotspeed preset main-guarded
 lotspeed status
 ```
@@ -48,7 +48,7 @@ Linux 4.19 及以上直接读取每条 TCP 的发送与重传字节计数：
 
 保护逻辑不使用 ACK 到达速率、Ping、RTT、Jitter 或 IP 地址作降档依据。每条 TCP 独立判断，同一 IP 的其他连接不会连坐。
 
-## 3.9.2 状态机
+## 3.9.3 状态机
 
 ```text
 FULL             256 Mbps，pacing 120%
@@ -58,11 +58,11 @@ PROBE_75         探测 192 Mbps，pacing 100%
 PROBE_FULL       探测 256 Mbps，pacing 120%
 ```
 
-统计窗口固定为 5 秒。新连接必须连续六个窗口达到当前目标的 70% 发送负载，才获得长期高速连接资格；前 30 秒不会受到额外限制。
+统计窗口固定为 5 秒。新连接必须连续六个窗口达到当前目标的 10% 发送负载，才获得长期高速连接资格；前 30 秒不会受到额外限制。在默认档位下，参与检测的门槛分别为 25.6、19.2 和 10 Mbps。
 
 首次下降要求最近两个 5 秒窗口都满足：
 
-- 发送量不少于 256 KiB，并达到当前目标的 70%
+- 发送量不少于 256 KiB，并达到当前目标的 10%
 - `总发送/原始发送 >= 1.8`
 
 第 30 秒时已经满足上述两个严重窗口即可从 `FULL` 降至 `LIMIT_75`。在 192 Mbps 档再次连续两个严重窗口，才降至 100 Mbps；不会继续下降。
@@ -84,7 +84,7 @@ LIMIT_100M -> PROBE_75 -> PROBE_FULL -> FULL
 LIMIT_75   -> PROBE_FULL -> FULL
 ```
 
-长期高速资格在连接持续传输时保留。任意两个连续窗口低于当前档位 70% 的负载后，认定长期下载结束，清除档位、计时和资格并恢复 `FULL`。后续重新高速传输需要重新观察 30 秒。小流量窗口不计算 1.3/1.8 比例。
+长期高速资格在连接持续传输时保留。任意两个连续窗口低于当前档位 10% 的负载后，认定长期下载结束，清除档位、计时和资格并恢复 `FULL`。后续重新高速传输需要重新观察 30 秒。小流量窗口不计算 1.3/1.8 比例。
 
 ## 无日志统计
 
