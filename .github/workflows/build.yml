@@ -11,45 +11,35 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.9.3-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.9.3-enhanced"' install.sh
-          grep -q 'VERSION="3.9.3-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh install-v310.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.10-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.10-enhanced"' install.sh
+          grep -q 'VERSION="3.10-enhanced"' lotspeedctl
           grep -q 'write_param lotserver_rate 32000000' lotspeedctl
+          grep -q 'write_param lotserver_min_rate 21000000' lotspeedctl
           grep -q 'write_param lotserver_gain 30' lotspeedctl
-          grep -q 'write_param lotserver_beta 820' lotspeedctl
-          grep -q 'write_param lotserver_max_cwnd 6000' lotspeedctl
-          grep -q 'LOTSPEED_GUARD_WINDOW_MS 5000' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_ACTIVE_PCT 10' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_LONG_WINDOWS 6' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_BAD_WINDOWS 2' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_FORCE_PROBE_WINDOWS 5' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_LOW_WINDOWS 2' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_SEVERE_OVERHEAD_PCT 80' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_RECOVER_OVERHEAD_PCT 30' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_FLOOR_RATE 12500000ULL' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_LIMIT_PCT 75' lotspeed.c
-          grep -q 'LOTSPEED_GUARD_MIN_BYTES 262144' lotspeed.c
-          grep -q 'GUARD_LIMIT_75' lotspeed.c
-          grep -q 'GUARD_LIMIT_FLOOR' lotspeed.c
-          grep -q 'GUARD_PROBE_75' lotspeed.c
-          grep -q 'return tp->bytes_retrans;' lotspeed.c
-          grep -q 'original_bytes = tx_bytes - retrans_bytes;' lotspeed.c
-          grep -q 'ca->guard_long_flow = true;' lotspeed.c
-          grep -q 'lotserver_pacing_gain : 100' lotspeed.c
-          grep -q 'lotspeed_update_retrans_guard' lotspeed.c
-          ! grep -q 'lotspeed_guard_dynamic_cap' lotspeed.c
-          ! grep -q 'GUARD_LIMIT_DYNAMIC' lotspeed.c
-          ! grep -q 'guard_acked_base' lotspeed.c
+          grep -q 'write_param lotserver_beta 871' lotspeedctl
+          grep -q 'write_param lotserver_max_cwnd 10000' lotspeedctl
+          grep -q 'write_param lotserver_pacing_gain 105' lotspeedctl
+          grep -q 'write_param lotserver_min_flight_ms 250' lotspeedctl
+          grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
+          grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
+          grep -q 'write_param lotserver_rtt_confirm_samples 20' lotspeedctl
+          grep -q 'LOTSPEED_MUX_WINDOW_MS 5000' lotspeed.c
+          grep -q 'LOTSPEED_MUX_ACTIVE_PCT 10' lotspeed.c
+          grep -q 'LOTSPEED_MUX_LOW_WINDOWS 2' lotspeed.c
+          grep -q 'static unsigned long lotserver_min_rate = 21000000ULL' lotspeed.c
+          grep -q 'lotspeed_update_mux_activity' lotspeed.c
+          grep -q 'lotspeed_reset_mux_history' lotspeed.c
+          grep -q 'lotspeed_scale_percent(ca->actual_rate, 105)' lotspeed.c
+          ! grep -q 'GUARD_LIMIT_' lotspeed.c
+          ! grep -q 'lotspeed_update_retrans_guard' lotspeed.c
           grep -q 'tx_bytes = lotspeed_tcp_counter_delta' lotspeed.c
           grep -q 'return tp->bytes_sent;' lotspeed.c
-          ! grep -q 'bytes_sent + tp->bytes_retrans' lotspeed.c
-          grep -q 'target_rate = lotspeed_guard_cap(ca);' lotspeed.c
-          ! grep -q 'lotserver_degraded_' lotspeed.c
-          grep -q 'guard-status) show_guard_status' lotspeedctl
+          grep -q 'rate-status|guard-status) show_rate_status' lotspeedctl
           grep -q 'ss -tinH state established' lotspeedctl
           grep -q 'write_param lotserver_hd_enable 0' lotspeedctl
-          grep -q 'write_param lotserver_noncong_beta 820' lotspeedctl
+          grep -q 'write_param lotserver_noncong_beta 1000' lotspeedctl
           grep -q 'net.ipv4.tcp_rmem=8192 524288 16777216' lotspeedctl
           grep -q 'net.ipv4.tcp_wmem=8192 524288 16777216' lotspeedctl
           grep -q 'net.core.rmem_max=16777216' lotspeedctl

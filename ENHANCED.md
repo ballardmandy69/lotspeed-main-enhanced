@@ -1,95 +1,75 @@
-# LotSpeed 3.9.3 Enhanced
+# LotSpeed 3.10 Enhanced
 
-LotSpeed 3.9.3 keeps the upstream `main` fixed-rate behavior for healthy and
-short-lived TCP Mux connections. Its per-connection guard limits only sustained,
-high-rate flows with severe retransmission overhead.
+LotSpeed 3.10 restores the congestion-gated adaptive model from the 3.6.4
+`mux-throughput` profile. It adds an exact 168 Mbps floor and clears stale
+per-connection learning after sustained low Mux traffic.
 
-## Recommended profile
+## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v393.sh | sudo bash
-sudo lotspeed preset main-guarded
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v310.sh | sudo bash
+sudo lotspeed preset mux-throughput
 lotspeed status
 ```
+
+## Main profile
 
 | Parameter | Value |
 | --- | ---: |
 | `lotserver_rate` | `32000000` bytes/s (256 Mbps) |
+| `lotserver_min_rate` | `21000000` bytes/s (168 Mbps) |
 | `lotserver_gain` | `30` (3.0x) |
-| `lotserver_beta` | `820` (about 80% retained) |
+| `lotserver_beta` | `871` (about 85% retained) |
 | `lotserver_min_cwnd` | `32` packets |
-| `lotserver_max_cwnd` | `6000` packets |
+| `lotserver_max_cwnd` | `10000` packets |
 | `lotserver_adaptive` | `1` |
-| `lotserver_pacing_gain` | `120` percent |
-| `lotserver_loss_guard` | `0` |
+| `lotserver_pacing_gain` | `105` percent |
+| `lotserver_min_flight_ms` | `250` ms |
+| `lotserver_loss_congest_pct` | `30` percent |
+| `lotserver_loss_recover_pct` | `25` percent |
+| `lotserver_rtt_confirm_samples` | `20` rounds |
+| `lotserver_loss_guard` | `1` |
+| `lotserver_noncong_beta` | `1000` |
 | `lotserver_hd_enable` | `0` |
 
-Setting `lotserver_adaptive=0` disables the retransmission guard. No new module
-parameters are introduced.
+## Dynamic rate
 
-## Signal and states
-
-On Linux 4.19 and newer the guard calculates five-second deltas:
+Outside congestion avoidance, the target remains 256 Mbps. During confirmed
+congestion it becomes:
 
 ```text
-original bytes       = bytes_sent - bytes_retrans
-retransmit overhead  = bytes_retrans / original bytes
-wire ratio           = bytes_sent / original bytes
-                     = 1 + retransmit overhead
+clamp(smoothed ACK arrival rate * 1.05, 168 Mbps, 256 Mbps)
 ```
 
-It does not use ACK arrival rate, Ping, RTT, jitter, or the client IP to select
-a guard tier.
+The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
+sample. Congestion detection follows the 3.6.4 Mux profile: 30% loss EWMA, or
+20 sustained RTT-inflated rounds with at least 25% loss EWMA. Once congestion
+clears for 250 ms, the target returns to 256 Mbps.
 
-| State | Target with the main profile | Pacing gain |
-| --- | ---: | ---: |
-| `FULL` | 256 Mbps | 120% |
-| `LIMIT_75` | 192 Mbps | 100% |
-| `LIMIT_100M` | 100 Mbps | 100% |
-| `PROBE_75` | 192 Mbps | 100% |
-| `PROBE_FULL` | 256 Mbps | 120% |
+## Low-traffic reset
 
-## Qualification and limiting
+Each TCP connection has a five-second activity window. Two consecutive windows
+below 10% of the configured ceiling clear the ACK-rate estimate, loss EWMA,
+RTT-congestion evidence, avoidance state, and adaptive target. With the main
+profile the threshold is 25.6 Mbps and the reset takes 10 seconds. A truly idle
+connection is also reset when transmission restarts after 10 seconds.
 
-A flow must transmit at least 10% of its current target for six consecutive
-five-second windows before it is eligible. This gives every new transfer 30
-seconds at the original full rate. With the default profile, the activity
-thresholds are 25.6, 19.2, and 10 Mbps in the three respective tiers.
+The reset is per TCP connection and does not affect other clients or use an IP
+address. It prevents a reused Mux from carrying a stale low-rate result into a
+later transfer.
 
-An eligible flow moves from `FULL` to `LIMIT_75` only after two consecutive
-active windows have a wire ratio of at least 1.8. Two more consecutive severe
-windows at 192 Mbps are required before moving to `LIMIT_100M`. The target never
-drops below 100 Mbps with the main profile.
-
-## Recovery and Mux reuse
-
-One active window below a 1.3 wire ratio starts a one-tier upward probe. Each
-probe lasts five seconds and succeeds only if its own ratio remains below 1.3.
-
-A limited flow continuously between 1.3 and 1.8 is not frozen forever. After
-five such windows (25 seconds), it receives a forced upward probe. A severe
-window resets that timer.
-
-Two consecutive low-activity windows clear the tier, timers, and long-flow
-qualification. The next high-rate transfer on the reused Mux starts at `FULL`
-and receives a fresh 30-second observation period. Ratios from low-volume
-windows are ignored.
-
-## On-demand visibility
-
-Do not enable verbose kernel logging on a high-connection-count production
-host. Use this on-demand snapshot instead:
+## Visibility
 
 ```bash
-sudo lotspeed guard-status
+sudo lotspeed rate-status
 ```
 
-It scans established LotSpeed sockets in the current network namespace and
-groups them by pacing rate. It does not create a daemon or write kernel logs.
+This on-demand command groups established LotSpeed sockets in the current
+network namespace as `FULL`, `FULL/JITTERY`, `ADAPTIVE_168_256M`, or unknown.
+`guard-status` remains as a compatibility alias. No daemon or kernel logging is
+enabled.
 
-## Mux socket buffers
-
-The guarded main aliases apply:
+## Mux buffers
 
 ```text
 net.core.rmem_max=16777216

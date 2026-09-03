@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.9.3 enhanced installer
+# LotSpeed v3.10 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   sudo bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v393.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v310.sh | sudo bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.9.3}"
+GITHUB_REF="${LOTSPEED_REF:-v3.10}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.9.3-enhanced"
+VERSION="3.10-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -110,6 +110,7 @@ validate_built_module() {
     local built_module="${INSTALL_DIR}/lotspeed.ko"
     local built_version parameters parameter
     local required_parameters=(
+        lotserver_min_rate
         lotserver_pacing_gain
         lotserver_probe_rtt_interval_ms
         lotserver_probe_rtt_duration_ms
@@ -138,7 +139,7 @@ validate_built_module() {
             fail "Built module is missing ${parameter}. Refusing to install an incomplete module."
     done
 
-    info "Validated module ${built_version} and v3.9.3 parameter set."
+    info "Validated module ${built_version} and v3.10 parameter set."
 }
 
 choose_fallback_cc() {

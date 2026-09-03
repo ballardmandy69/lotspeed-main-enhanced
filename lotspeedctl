@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.9.3 enhanced management utility
+# LotSpeed v3.10 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.9.3-enhanced"
+VERSION="3.10-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -108,19 +108,19 @@ set_param() {
 set_common_safety() {
     write_param lotserver_turbo 0
     write_param lotserver_pacing_gain 120
-    write_param lotserver_probe_rtt_interval_ms 300000
-    write_param lotserver_probe_rtt_duration_ms 100
-    write_param lotserver_probe_rtt_cwnd_pct 75
-    write_param lotserver_min_rtt_window_sec 30
+    write_param lotserver_probe_rtt_interval_ms 30000
+    write_param lotserver_probe_rtt_duration_ms 150
+    write_param lotserver_probe_rtt_cwnd_pct 50
+    write_param lotserver_min_rtt_window_sec 10
     write_param lotserver_rtt_tolerance_pct 60
     write_param lotserver_min_flight_ms 0
     write_param lotserver_avoid_hold_ms 500
     write_param lotserver_loss_congest_pct 20
     write_param lotserver_loss_recover_pct 8
     write_param lotserver_rtt_confirm_samples 12
-    write_param lotserver_loss_guard 0
-    write_param lotserver_noncong_beta 820
-    write_param lotserver_hd_enable 0
+    write_param lotserver_loss_guard 1
+    write_param lotserver_noncong_beta 972
+    write_param lotserver_hd_enable 1
     write_param lotserver_hd_thresh_us 120000
     write_param lotserver_hd_gain_boost 20
 }
@@ -129,6 +129,7 @@ apply_preset() {
     local preset="${1:-}"
     local enhanced_parameters=(
         lotserver_rate
+        lotserver_min_rate
         lotserver_gain
         lotserver_beta
         lotserver_min_cwnd
@@ -159,19 +160,34 @@ apply_preset() {
 
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
-            # Original main behavior with a strict per-Mux retransmission guard.
+            # v3.6.4 Mux profile with a precise adaptive floor and idle reset.
             write_param lotserver_rate 32000000
+            write_param lotserver_min_rate 21000000
             write_param lotserver_gain 30
-            write_param lotserver_beta 820
+            write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
-            write_param lotserver_max_cwnd 6000
+            write_param lotserver_max_cwnd 10000
             write_param lotserver_adaptive 1
             set_common_safety
+            write_param lotserver_pacing_gain 105
+            write_param lotserver_probe_rtt_interval_ms 300000
+            write_param lotserver_probe_rtt_duration_ms 100
+            write_param lotserver_probe_rtt_cwnd_pct 75
+            write_param lotserver_min_rtt_window_sec 30
+            write_param lotserver_rtt_tolerance_pct 80
+            write_param lotserver_min_flight_ms 250
+            write_param lotserver_avoid_hold_ms 250
+            write_param lotserver_loss_congest_pct 30
+            write_param lotserver_loss_recover_pct 25
+            write_param lotserver_rtt_confirm_samples 20
+            write_param lotserver_noncong_beta 1000
+            write_param lotserver_hd_enable 0
             configure_mux_buffers
             ;;
         ct-163-return|ct-return)
             # Overseas server to China Telecom over ordinary 163 routes.
             write_param lotserver_rate 31250000
+            write_param lotserver_min_rate 21000000
             write_param lotserver_gain 20
             write_param lotserver_beta 768
             write_param lotserver_min_cwnd 32
@@ -192,6 +208,7 @@ apply_preset() {
             ;;
         conservative)
             write_param lotserver_rate 125000000
+            write_param lotserver_min_rate 93750000
             write_param lotserver_gain 15
             write_param lotserver_beta 717
             write_param lotserver_min_cwnd 16
@@ -201,6 +218,7 @@ apply_preset() {
             ;;
         balanced)
             write_param lotserver_rate 625000000
+            write_param lotserver_min_rate 468750000
             write_param lotserver_gain 20
             write_param lotserver_beta 717
             write_param lotserver_min_cwnd 16
@@ -210,6 +228,7 @@ apply_preset() {
             ;;
         aggressive)
             write_param lotserver_rate 1250000000
+            write_param lotserver_min_rate 937500000
             write_param lotserver_gain 30
             write_param lotserver_beta 819
             write_param lotserver_min_cwnd 32
@@ -219,6 +238,7 @@ apply_preset() {
             ;;
         fixed-1g)
             write_param lotserver_rate 125000000
+            write_param lotserver_min_rate 125000000
             write_param lotserver_gain 30
             write_param lotserver_beta 820
             write_param lotserver_min_cwnd 32
@@ -229,11 +249,11 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
-  main-guarded   - Original 256 Mbps main profile with cautious per-Mux guard
-  domestic-mixed - Alias for main-guarded
-  mux-throughput - Alias for main-guarded
+  mux-throughput - v3.6.4 Mux control, adaptive 168-256 Mbps
+  main-guarded   - Alias for mux-throughput
+  domestic-mixed - Alias for mux-throughput
   ct-163-return - Overseas to China Telecom ordinary 163 route
-  wan-enhanced  - Alias for main-guarded
+  wan-enhanced  - Alias for mux-throughput
   conservative  - 1 Gbps ceiling, adaptive, low queue pressure
   balanced      - 5 Gbps ceiling, adaptive
   aggressive    - 10 Gbps ceiling, adaptive
@@ -288,7 +308,7 @@ show_status() {
     while IFS= read -r name; do
         value="$(<"${PARAM_DIR}/${name}")"
         case "${name}" in
-            lotserver_rate)
+            lotserver_rate|lotserver_min_rate)
                 printf '  %-32s %s bytes/s (%s Mbps)\n' \
                     "${name}" "${value}" "$((value * 8 / 1000000))"
                 ;;
@@ -307,30 +327,35 @@ show_status() {
     done < <(find "${PARAM_DIR}" -maxdepth 1 -type f -printf '%f\n' | sort)
 }
 
-show_guard_status() {
-    local rate pacing_gain full_bps limit_bps floor_rate floor_bps
+show_rate_status() {
+    local rate min_rate pacing_gain jitter_gain
+    local full_bps jitter_bps dynamic_min_bps dynamic_max_bps
 
     require_loaded
     command -v ss >/dev/null 2>&1 || fail "ss command not found."
 
     rate="$(<"${PARAM_DIR}/lotserver_rate")"
+    min_rate="$(<"${PARAM_DIR}/lotserver_min_rate")"
     pacing_gain="$(<"${PARAM_DIR}/lotserver_pacing_gain")"
     full_bps=$((rate * pacing_gain * 8 / 100))
-    limit_bps=$((rate * 75 * 8 / 100))
-    floor_rate=12500000
-    if (( rate < floor_rate )); then
-        floor_rate="${rate}"
+    jitter_gain="${pacing_gain}"
+    if (( jitter_gain > 103 )); then
+        jitter_gain=103
     fi
-    floor_bps=$((floor_rate * 8))
+    jitter_bps=$((rate * jitter_gain * 8 / 100))
+    dynamic_min_bps=$((min_rate * 8))
+    dynamic_max_bps=$((rate * 8))
 
-    printf "${cyan}LotSpeed guard rate summary${reset}\n"
+    printf "${cyan}LotSpeed adaptive rate summary${reset}\n"
     printf 'Current network namespace; established LotSpeed sockets only.\n'
-    printf 'Expected rates: FULL=%s, LIMIT_75=%s, LIMIT_100M=%s bps\n\n' \
-        "${full_bps}" "${limit_bps}" "${floor_bps}"
+    printf 'Expected rates: FULL=%s, JITTERY=%s, ADAPTIVE=%s-%s bps\n\n' \
+        "${full_bps}" "${jitter_bps}" \
+        "${dynamic_min_bps}" "${dynamic_max_bps}"
 
     LC_ALL=C ss -tinH state established | awk \
-        -v full="${full_bps}" -v limit75="${limit_bps}" \
-        -v floor="${floor_bps}" '
+        -v full="${full_bps}" -v jitter="${jitter_bps}" \
+        -v dynamic_min="${dynamic_min_bps}" \
+        -v dynamic_max="${dynamic_max_bps}" '
         function rate_value(text, value, suffix) {
             sub(/bps$/, "", text)
             suffix = substr(text, length(text), 1)
@@ -364,17 +389,18 @@ show_guard_status() {
             total++
             if (close_to(pacing, full))
                 full_count++
-            else if (close_to(pacing, limit75))
-                limit_count++
-            else if (close_to(pacing, floor))
-                floor_count++
+            else if (close_to(pacing, jitter))
+                jitter_count++
+            else if (pacing >= dynamic_min * 0.98 &&
+                     pacing <= dynamic_max * 1.02)
+                dynamic_count++
             else
                 other_count++
         }
         END {
-            printf "  %-24s %u\n", "FULL/PROBE_FULL", full_count + 0
-            printf "  %-24s %u\n", "LIMIT_75/PROBE_75", limit_count + 0
-            printf "  %-24s %u\n", "LIMIT_100M", floor_count + 0
+            printf "  %-24s %u\n", "FULL", full_count + 0
+            printf "  %-24s %u\n", "FULL/JITTERY", jitter_count + 0
+            printf "  %-24s %u\n", "ADAPTIVE_168_256M", dynamic_count + 0
             printf "  %-24s %u\n", "OTHER/UNKNOWN", other_count + 0
             printf "  %-24s %u\n", "TOTAL", total + 0
         }'
@@ -456,7 +482,8 @@ Usage: lotspeed <command> [arguments]
 
 Commands:
   status                         Show module and parameter status
-  guard-status                   Count current sockets by guard rate
+  rate-status                    Count sockets by adaptive pacing rate
+  guard-status                   Compatibility alias for rate-status
   preset <name>                  Apply a tested parameter profile
   set <parameter> <value>        Change one module parameter
   start                          Load and activate LotSpeed
@@ -470,7 +497,7 @@ EOF
 
 case "${1:-help}" in
     status) show_status ;;
-    guard-status) show_guard_status ;;
+    rate-status|guard-status) show_rate_status ;;
     preset) apply_preset "${2:-}" ;;
     set) set_param "${2:-}" "${3:-}" ;;
     start) start_module ;;
