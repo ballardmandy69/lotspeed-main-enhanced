@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.9.1 enhanced management utility
+# LotSpeed v3.9.2 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.9.1-enhanced"
+VERSION="3.9.2-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -159,7 +159,7 @@ apply_preset() {
 
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
-            # Original main behavior with a cautious per-Mux efficiency guard.
+            # Original main behavior with a strict per-Mux retransmission guard.
             write_param lotserver_rate 32000000
             write_param lotserver_gain 30
             write_param lotserver_beta 820
@@ -307,6 +307,79 @@ show_status() {
     done < <(find "${PARAM_DIR}" -maxdepth 1 -type f -printf '%f\n' | sort)
 }
 
+show_guard_status() {
+    local rate pacing_gain full_bps limit_bps floor_rate floor_bps
+
+    require_loaded
+    command -v ss >/dev/null 2>&1 || fail "ss command not found."
+
+    rate="$(<"${PARAM_DIR}/lotserver_rate")"
+    pacing_gain="$(<"${PARAM_DIR}/lotserver_pacing_gain")"
+    full_bps=$((rate * pacing_gain * 8 / 100))
+    limit_bps=$((rate * 75 * 8 / 100))
+    floor_rate=12500000
+    if (( rate < floor_rate )); then
+        floor_rate="${rate}"
+    fi
+    floor_bps=$((floor_rate * 8))
+
+    printf "${cyan}LotSpeed guard rate summary${reset}\n"
+    printf 'Current network namespace; established LotSpeed sockets only.\n'
+    printf 'Expected rates: FULL=%s, LIMIT_75=%s, LIMIT_100M=%s bps\n\n' \
+        "${full_bps}" "${limit_bps}" "${floor_bps}"
+
+    LC_ALL=C ss -tinH state established | awk \
+        -v full="${full_bps}" -v limit75="${limit_bps}" \
+        -v floor="${floor_bps}" '
+        function rate_value(text, value, suffix) {
+            sub(/bps$/, "", text)
+            suffix = substr(text, length(text), 1)
+            if (suffix == "K" || suffix == "k") {
+                text = substr(text, 1, length(text) - 1)
+                return text * 1000
+            }
+            if (suffix == "M" || suffix == "m") {
+                text = substr(text, 1, length(text) - 1)
+                return text * 1000000
+            }
+            if (suffix == "G" || suffix == "g") {
+                text = substr(text, 1, length(text) - 1)
+                return text * 1000000000
+            }
+            return text + 0
+        }
+        function close_to(value, target) {
+            return target > 0 && value >= target * 0.98 &&
+                   value <= target * 1.02
+        }
+        /lotspeed/ {
+            pacing = 0
+            for (i = 1; i <= NF; i++) {
+                if ($i == "pacing_rate" && i < NF) {
+                    pacing = rate_value($(i + 1))
+                    break
+                }
+            }
+
+            total++
+            if (close_to(pacing, full))
+                full_count++
+            else if (close_to(pacing, limit75))
+                limit_count++
+            else if (close_to(pacing, floor))
+                floor_count++
+            else
+                other_count++
+        }
+        END {
+            printf "  %-24s %u\n", "FULL/PROBE_FULL", full_count + 0
+            printf "  %-24s %u\n", "LIMIT_75/PROBE_75", limit_count + 0
+            printf "  %-24s %u\n", "LIMIT_100M", floor_count + 0
+            printf "  %-24s %u\n", "OTHER/UNKNOWN", other_count + 0
+            printf "  %-24s %u\n", "TOTAL", total + 0
+        }'
+}
+
 start_module() {
     require_root
     if ! lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
@@ -383,6 +456,7 @@ Usage: lotspeed <command> [arguments]
 
 Commands:
   status                         Show module and parameter status
+  guard-status                   Count current sockets by guard rate
   preset <name>                  Apply a tested parameter profile
   set <parameter> <value>        Change one module parameter
   start                          Load and activate LotSpeed
@@ -396,6 +470,7 @@ EOF
 
 case "${1:-help}" in
     status) show_status ;;
+    guard-status) show_guard_status ;;
     preset) apply_preset "${2:-}" ;;
     set) set_param "${2:-}" "${3:-}" ;;
     start) start_module ;;
