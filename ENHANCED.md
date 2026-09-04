@@ -1,14 +1,15 @@
-# LotSpeed 3.10.3 Enhanced
+# LotSpeed 3.10.4 Enhanced
 
-LotSpeed 3.10.3 builds on the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.4 builds on the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
-adapts on severe congestion or sustained moderate loss, and it clears stale
-per-connection learning after sustained low Mux traffic.
+aligns delivered and lost counters to one packet-timed RTT window, adapts on
+severe congestion or sustained moderate loss, and clears stale per-connection
+learning after sustained low Mux traffic.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3103.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3104.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -29,7 +30,7 @@ lotspeed status
 | `lotserver_rtt_tolerance_pct` | `120` percent |
 | `lotserver_loss_congest_pct` | `40` percent |
 | `lotserver_loss_recover_pct` | `30` percent |
-| `lotserver_loss_adapt_pct` | `8` percent |
+| `lotserver_loss_adapt_pct` | `6` percent |
 | `lotserver_rtt_confirm_samples` | `40` rounds |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
@@ -50,12 +51,17 @@ sample. Only a non-`app_limited` sample with at least 32 delivered packets and
 an interval no longer than two seconds can update the congestion classifier.
 Adaptation requires a 40% loss EWMA, 40 qualified rounds above the RTT
 threshold with at least 30% loss EWMA, or sustained moderate loss. The
-moderate path requires both the loss EWMA and the current sample to be at least
-8% for eight accumulated qualified rounds. Clean samples decay this evidence
-quickly. The RTT threshold is the measured base RTT plus 120% and a jitter
-allowance. A single RTO still reduces cwnd but cannot lower the target rate by
-itself. Once congestion clears for 250 ms, the target returns to the configured
-ceiling.
+moderate path requires a round-aligned loss EWMA of at least 6% for eight
+accumulated qualified rounds. The evidence is held while EWMA is between about
+4.5% and 6%, then decays by two per qualified round below about 4.5%. The RTT
+threshold is the measured base RTT plus 120% and a jitter allowance. A single
+RTO still reduces cwnd but cannot lower the target rate by itself. Once
+congestion clears for 250 ms, the target returns to the configured ceiling.
+
+Unlike 3.10.3, the loss numerator is no longer the loss newly marked by only
+the current ACK. Both delivered and cumulative lost deltas now span the same
+packet-timed RTT, preventing sustained loss from being diluted by a mismatched
+delivery interval.
 
 `lotserver_loss_adapt_pct` can be changed while the module is running. Lower
 values admit more persistently lossy connections; higher values are stricter.

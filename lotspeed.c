@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.3 sustained moderate-loss Mux adaptive edition
+// lotspeed.c - v3.10.4 round-aligned moderate-loss Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -72,7 +72,7 @@ static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
 static unsigned int lotserver_loss_congest_pct = 40;
 static unsigned int lotserver_loss_recover_pct = 30;
-static unsigned int lotserver_loss_adapt_pct = 8;
+static unsigned int lotserver_loss_adapt_pct = 6;
 static unsigned int lotserver_rtt_confirm_samples = 40;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
@@ -462,6 +462,7 @@ struct lotspeed {
     u32 probe_prior_cwnd;
     u32 mux_activity_stamp;
     u32 next_rtt_delivered;
+    u32 round_lost;
     u32 round_stamp;
     u16 extra_acked;
     u8 state;
@@ -525,6 +526,7 @@ static void lotspeed_init(struct sock *sk)
     ca->mux_activity_stamp = tcp_jiffies32;
     ca->round_stamp = tcp_jiffies32;
     ca->next_rtt_delivered = tp->delivered;
+    ca->round_lost = tp->lost;
     ca->path_mode = PATH_STABLE;
     ca->target_rate = lotserver_rate;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
@@ -691,7 +693,13 @@ static void lotspeed_update_path_mode(struct sock *sk,
                 div64_u64((u64)losses * LOTSPEED_LOSS_SCALE,
                           total_packets),
                 LOTSPEED_LOSS_SCALE);
-        ca->loss_ewma = (ca->loss_ewma * 7 + sample_loss) / 8;
+        /* Directional rounding lets low loss percentages converge exactly. */
+        if (sample_loss > ca->loss_ewma)
+            ca->loss_ewma += DIV_ROUND_UP(sample_loss - ca->loss_ewma,
+                                          8);
+        else if (sample_loss < ca->loss_ewma)
+            ca->loss_ewma -= DIV_ROUND_UP(ca->loss_ewma - sample_loss,
+                                          8);
     }
 
     loss_congest = lotserver_loss_congest_pct * LOTSPEED_LOSS_SCALE / 100;
@@ -700,16 +708,13 @@ static void lotspeed_update_path_mode(struct sock *sk,
     loss_adapt_recover = max_t(u32, loss_adapt * 3 / 4, 1);
     jitter_threshold = max_t(u32, ca->rtt_min / 4, 8000);
 
-    /* Require fresh loss as well as EWMA so stale history cannot accumulate. */
-    if (ca->loss_ewma >= loss_adapt && sample_loss >= loss_adapt) {
+    /* EWMA smooths burst loss; hysteresis keeps borderline rounds neutral. */
+    if (ca->loss_ewma >= loss_adapt) {
         if (ca->loss_adapt_count < LOTSPEED_LOSS_ADAPT_SAMPLES)
             ca->loss_adapt_count++;
-    } else if (ca->loss_ewma <= loss_adapt_recover ||
-               sample_loss <= loss_adapt_recover) {
+    } else if (ca->loss_ewma <= loss_adapt_recover) {
         ca->loss_adapt_count = ca->loss_adapt_count > 2 ?
                                ca->loss_adapt_count - 2 : 0;
-    } else if (ca->loss_adapt_count > 0) {
-        ca->loss_adapt_count--;
     }
 
     if (ca->loss_ewma >= loss_congest ||
@@ -790,6 +795,9 @@ static void lotspeed_reset_mux_history(struct sock *sk, u32 now)
     ca->mux_low_windows = 0;
     ca->mux_tx_base = lotspeed_tcp_tx_counter(tp);
     ca->mux_activity_stamp = now;
+    ca->next_rtt_delivered = tp->delivered;
+    ca->round_lost = tp->lost;
+    ca->round_stamp = now;
 
     if (ca->state == AVOIDING)
         enter_state(sk, CRUISING);
@@ -865,11 +873,12 @@ static bool lotspeed_update_round_model(struct sock *sk,
         return false;
 
     delivered = tp->delivered - ca->next_rtt_delivered;
-    losses = rs->losses > 0 ? rs->losses : 0;
+    losses = tp->lost - ca->round_lost;
     elapsed_jiffies = now - ca->round_stamp;
     elapsed_us = jiffies_to_usecs(elapsed_jiffies);
 
     ca->next_rtt_delivered = tp->delivered;
+    ca->round_lost = tp->lost;
     ca->round_stamp = now;
 
     if (delivered && elapsed_us) {
@@ -903,17 +912,17 @@ static bool lotspeed_update_round_model(struct sock *sk,
         ca->extra_acked = ca->extra_acked * 7 / 8;
     }
 
-    path_delivered = rs->delivered > 0 ? (u32)rs->delivered : 0;
+    path_delivered = delivered;
     qualified_round = !rs->is_app_limited &&
                       path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
-                      rs->interval_us > 0 &&
-                      rs->interval_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+                      elapsed_us > 0 &&
+                      elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
     lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
                               qualified_round);
     return true;
 }
 
-// --- v3.10.3 core: severe or sustained moderate-loss Mux adaptation ---
+// --- v3.10.4 core: round-aligned sustained-loss Mux adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1270,6 +1279,7 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
             ca->ss_mode = true;
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
+            ca->round_lost = tp->lost;
             ca->extra_acked = 0;
             break;
 
@@ -1282,6 +1292,7 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
             }
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
+            ca->round_lost = tp->lost;
             ca->extra_acked = 0;
             break;
 
@@ -1326,7 +1337,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.3 - moderate-loss adaptive Mux      ║\n");
+    pr_info("║    LotSpeed v3.10.4 - round-loss adaptive Mux         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1401,7 +1412,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.3 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.4 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1417,6 +1428,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.3-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.3 - sustained moderate-loss Mux adaptive control");
+MODULE_VERSION("3.10.4-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.4 - round-aligned moderate-loss Mux adaptive control");
 MODULE_ALIAS("tcp_lotspeed");
