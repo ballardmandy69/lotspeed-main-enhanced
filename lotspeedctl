@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.2 enhanced management utility
+# LotSpeed v3.10.3 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.2-enhanced"
+VERSION="3.10.3-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -117,6 +117,7 @@ set_common_safety() {
     write_param lotserver_avoid_hold_ms 500
     write_param lotserver_loss_congest_pct 20
     write_param lotserver_loss_recover_pct 8
+    write_param lotserver_loss_adapt_pct 8
     write_param lotserver_rtt_confirm_samples 12
     write_param lotserver_loss_guard 1
     write_param lotserver_noncong_beta 972
@@ -146,6 +147,7 @@ apply_preset() {
         lotserver_avoid_hold_ms
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
+        lotserver_loss_adapt_pct
         lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
@@ -160,7 +162,7 @@ apply_preset() {
 
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
-            # Strict v3.6.4 Mux profile with a proportional adaptive floor.
+            # Mux profile with sustained moderate-loss adaptive control.
             write_param lotserver_rate 32000000
             write_param lotserver_min_rate_pct 60
             write_param lotserver_gain 30
@@ -177,8 +179,9 @@ apply_preset() {
             write_param lotserver_rtt_tolerance_pct 120
             write_param lotserver_min_flight_ms 250
             write_param lotserver_avoid_hold_ms 250
-            write_param lotserver_loss_congest_pct 50
-            write_param lotserver_loss_recover_pct 40
+            write_param lotserver_loss_congest_pct 40
+            write_param lotserver_loss_recover_pct 30
+            write_param lotserver_loss_adapt_pct 8
             write_param lotserver_rtt_confirm_samples 40
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
@@ -249,7 +252,7 @@ apply_preset() {
         *)
             cat <<'EOF'
 Available presets:
-  mux-throughput - Strict Mux control, adaptive floor at 60% of rate
+  mux-throughput - Sustained-loss Mux control, adaptive floor at 60%
   main-guarded   - Alias for mux-throughput
   domestic-mixed - Alias for mux-throughput
   ct-163-return - Overseas to China Telecom ordinary 163 route

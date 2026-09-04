@@ -1,14 +1,14 @@
-# LotSpeed 3.10.2 Enhanced
+# LotSpeed 3.10.3 Enhanced
 
-LotSpeed 3.10.2 restores the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.3 builds on the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
-requires qualified sustained severe congestion before adapting, and it clears
-stale per-connection learning after sustained low Mux traffic.
+adapts on severe congestion or sustained moderate loss, and it clears stale
+per-connection learning after sustained low Mux traffic.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3102.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3103.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -27,8 +27,9 @@ lotspeed status
 | `lotserver_pacing_gain` | `120` percent |
 | `lotserver_min_flight_ms` | `250` ms |
 | `lotserver_rtt_tolerance_pct` | `120` percent |
-| `lotserver_loss_congest_pct` | `50` percent |
-| `lotserver_loss_recover_pct` | `40` percent |
+| `lotserver_loss_congest_pct` | `40` percent |
+| `lotserver_loss_recover_pct` | `30` percent |
+| `lotserver_loss_adapt_pct` | `8` percent |
 | `lotserver_rtt_confirm_samples` | `40` rounds |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
@@ -47,19 +48,28 @@ clamp(smoothed ACK arrival rate * 1.05, rate * 60%, rate)
 The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
 sample. Only a non-`app_limited` sample with at least 32 delivered packets and
 an interval no longer than two seconds can update the congestion classifier.
-Adaptation requires a 50% loss EWMA, or 40 qualified rounds above the RTT
-threshold with at least 40% loss EWMA. The RTT threshold is the measured base
-RTT plus 120% and a jitter allowance. A single RTO still reduces cwnd but
-cannot lower the target rate by itself. Once congestion clears for 250 ms, the
-target returns to the configured ceiling.
+Adaptation requires a 40% loss EWMA, 40 qualified rounds above the RTT
+threshold with at least 30% loss EWMA, or sustained moderate loss. The
+moderate path requires both the loss EWMA and the current sample to be at least
+8% for eight accumulated qualified rounds. Clean samples decay this evidence
+quickly. The RTT threshold is the measured base RTT plus 120% and a jitter
+allowance. A single RTO still reduces cwnd but cannot lower the target rate by
+itself. Once congestion clears for 250 ms, the target returns to the configured
+ceiling.
+
+`lotserver_loss_adapt_pct` can be changed while the module is running. Lower
+values admit more persistently lossy connections; higher values are stricter.
+The classifier remains quality-based and does not force a fixed percentage of
+connections into adaptive mode.
 
 ## Low-traffic reset
 
 Each TCP connection has a five-second activity window. Two consecutive windows
 below 10% of the configured ceiling clear the ACK-rate estimate, loss EWMA,
-RTT-congestion evidence, avoidance state, and adaptive target. With the main
-profile the threshold is 25.6 Mbps and the reset takes 10 seconds. A truly idle
-connection is also reset when transmission restarts after 10 seconds.
+moderate-loss and RTT-congestion evidence, avoidance state, and adaptive
+target. With the main profile the threshold is 25.6 Mbps and the reset takes
+10 seconds. A truly idle connection is also reset when transmission restarts
+after 10 seconds.
 
 The reset is per TCP connection and does not affect other clients or use an IP
 address. It prevents a reused Mux from carrying a stale low-rate result into a
