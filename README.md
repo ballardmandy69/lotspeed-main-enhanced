@@ -1,11 +1,11 @@
-# LotSpeed 3.10.5 Enhanced
+# LotSpeed 3.10.6 Enhanced
 
-本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 60%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.5 恢复 3.6.4 对 MUX 丢包样本的可见性，同时继续严格过滤 RTT 抖动样本。
+本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 60%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.6 恢复接近 3.6.4 的 MUX 丢包与 RTT 采样范围，同时保留 EWMA、8 轮确认和快速恢复。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3105.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3106.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -22,11 +22,11 @@ lotserver_max_cwnd=10000
 lotserver_adaptive=1
 lotserver_pacing_gain=120
 lotserver_min_flight_ms=250
-lotserver_rtt_tolerance_pct=120
-lotserver_loss_congest_pct=40
-lotserver_loss_recover_pct=30
-lotserver_loss_adapt_pct=6
-lotserver_rtt_confirm_samples=40
+lotserver_rtt_tolerance_pct=80
+lotserver_loss_congest_pct=30
+lotserver_loss_recover_pct=25
+lotserver_loss_adapt_pct=5
+lotserver_rtt_confirm_samples=20
 lotserver_loss_guard=1
 lotserver_noncong_beta=1000
 lotserver_hd_enable=0
@@ -50,33 +50,33 @@ lotserver_hd_enable=0
 
 丢包学习条件：
 
-- 同一 packet-timed RTT 至少 delivered 8 个包
+- 同一 packet-timed RTT 至少 delivered 1 个包
 - 采样区间不超过 2 秒
 - 允许 `app_limited`，适配间歇写入的长期 MUX
 
-RTT 拥塞条件仍然严格：
+RTT 学习条件：
 
-- 非 `app_limited`
-- 当前采样至少确认 32 个 delivered packets
+- 允许 `app_limited`
+- 当前采样至少确认 8 个 delivered packets
 - 采样区间不超过 2 秒
 
 在合格采样上，满足任一条件即确认拥塞：
 
 ```text
-丢包 EWMA >= 40%
+丢包 EWMA >= 30%
 或
-RTT 相对基线膨胀超过 120%，持续 40 个轮次，且丢包 EWMA >= 30%
+RTT 相对基线膨胀超过 80%，持续 20 个轮次，且丢包 EWMA >= 25%
 或
-同一 RTT 窗口的丢包 EWMA >= 6%，连续累计 8 个合格轮次
+同一 RTT 窗口的丢包 EWMA >= 5%，连续累计 8 个合格轮次
 ```
 
-每个 packet-timed RTT 分别保存累计 delivered 和 lost 的起止快照，EWMA 的分子、分母来自同一窗口。EWMA 在 4.5%～6% 之间时保持中度证据，降到约 4.5% 以下时每个合格轮次扣除两个证据，因此偶发丢包不会直接触发。与 3.10.4 不同，短暂清空发送队列不会阻止丢包 EWMA 更新；但它仍不会放宽 RTT 判断。`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 256 Mbps 目标。默认主配置的动态范围是 153.6～256 Mbps；如果把上限设置为 416 Mbps，下限会自动变为 249.6 Mbps。
+每个 packet-timed RTT 分别保存累计 delivered 和 lost 的起止快照，EWMA 的分子、分母来自同一窗口。EWMA 在约 3.75%～5% 之间时保持中度证据，降到约 3.75% 以下时每个合格轮次扣除两个证据，因此偶发丢包不会直接触发。短暂清空发送队列不会阻止长期 MUX 的丢包或 RTT 学习。`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 256 Mbps 目标。默认主配置的动态范围是 153.6～256 Mbps；如果把上限设置为 416 Mbps，下限会自动变为 249.6 Mbps。
 
 `lotserver_loss_adapt_pct` 可以在线调整。调低会让更多持续丢包连接进入 adapt，调高则更严格；它按连接质量工作，不会强制凑出固定比例：
 
 ```bash
-sudo lotspeed set lotserver_loss_adapt_pct 4  # 更积极
-sudo lotspeed set lotserver_loss_adapt_pct 8  # 更保守
+sudo lotspeed set lotserver_loss_adapt_pct 3  # 更积极
+sudo lotspeed set lotserver_loss_adapt_pct 7  # 更保守
 ```
 
 ## MUX 低流量重置

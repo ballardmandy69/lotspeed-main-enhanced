@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.5 enhanced management utility
+# LotSpeed v3.10.6 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.5-enhanced"
+VERSION="3.10.6-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -176,13 +176,13 @@ apply_preset() {
             write_param lotserver_probe_rtt_duration_ms 100
             write_param lotserver_probe_rtt_cwnd_pct 75
             write_param lotserver_min_rtt_window_sec 30
-            write_param lotserver_rtt_tolerance_pct 120
+            write_param lotserver_rtt_tolerance_pct 80
             write_param lotserver_min_flight_ms 250
             write_param lotserver_avoid_hold_ms 250
-            write_param lotserver_loss_congest_pct 40
-            write_param lotserver_loss_recover_pct 30
-            write_param lotserver_loss_adapt_pct 6
-            write_param lotserver_rtt_confirm_samples 40
+            write_param lotserver_loss_congest_pct 30
+            write_param lotserver_loss_recover_pct 25
+            write_param lotserver_loss_adapt_pct 5
+            write_param lotserver_rtt_confirm_samples 20
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
             configure_mux_buffers

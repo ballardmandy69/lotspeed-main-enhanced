@@ -1,15 +1,15 @@
-# LotSpeed 3.10.5 Enhanced
+# LotSpeed 3.10.6 Enhanced
 
-LotSpeed 3.10.5 builds on the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.6 builds on the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
-restores loss visibility for intermittently written Mux connections, keeps RTT
-classification strict, and clears stale per-connection learning after
-sustained low Mux traffic.
+restores broad Mux loss and RTT visibility, and clears stale per-connection
+learning after sustained low Mux traffic. EWMA and eight-round confirmation
+remain in place to reject isolated spikes.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3105.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3106.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -27,11 +27,11 @@ lotspeed status
 | `lotserver_adaptive` | `1` |
 | `lotserver_pacing_gain` | `120` percent |
 | `lotserver_min_flight_ms` | `250` ms |
-| `lotserver_rtt_tolerance_pct` | `120` percent |
-| `lotserver_loss_congest_pct` | `40` percent |
-| `lotserver_loss_recover_pct` | `30` percent |
-| `lotserver_loss_adapt_pct` | `6` percent |
-| `lotserver_rtt_confirm_samples` | `40` rounds |
+| `lotserver_rtt_tolerance_pct` | `80` percent |
+| `lotserver_loss_congest_pct` | `30` percent |
+| `lotserver_loss_recover_pct` | `25` percent |
+| `lotserver_loss_adapt_pct` | `5` percent |
+| `lotserver_rtt_confirm_samples` | `20` rounds |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
 | `lotserver_hd_enable` | `0` |
@@ -48,16 +48,15 @@ clamp(smoothed ACK arrival rate * 1.05, rate * 60%, rate)
 
 The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
 sample. Loss and RTT classification have separate eligibility gates. A loss
-sample needs at least eight delivered packets in a packet-timed RTT no longer
-than two seconds, and may be `app_limited`. RTT evidence still requires a
-non-`app_limited` round with at least 32 delivered packets and the same maximum
-interval.
-Adaptation requires a 40% loss EWMA, 40 qualified rounds above the RTT
-threshold with at least 30% loss EWMA, or sustained moderate loss. The
-moderate path requires a round-aligned loss EWMA of at least 6% for eight
+sample needs at least one delivered packet in a packet-timed RTT no longer
+than two seconds. RTT evidence needs at least eight delivered packets over the
+same maximum interval. Both accept `app_limited` Mux rounds.
+Adaptation requires a 30% loss EWMA, 20 qualified rounds above the RTT
+threshold with at least 25% loss EWMA, or sustained moderate loss. The
+moderate path requires a round-aligned loss EWMA of at least 5% for eight
 accumulated qualified rounds. The evidence is held while EWMA is between about
-4.5% and 6%, then decays by two per qualified round below about 4.5%. The RTT
-threshold is the measured base RTT plus 120% and a jitter allowance. A single
+3.75% and 5%, then decays by two per qualified round below about 3.75%. The RTT
+threshold is the measured base RTT plus 80% and a jitter allowance. A single
 RTO still reduces cwnd but cannot lower the target rate by itself. Once
 congestion clears for 250 ms, the target returns to the configured ceiling.
 
@@ -66,9 +65,8 @@ the current ACK. Both delivered and cumulative lost deltas now span the same
 packet-timed RTT, preventing sustained loss from being diluted by a mismatched
 delivery interval.
 
-Unlike 3.10.4, a temporary empty send queue no longer discards an otherwise
-valid Mux loss sample. The relaxed gate applies only to loss learning; it does
-not make RTT jitter classification more aggressive.
+Unlike 3.10.5, a temporary empty send queue no longer blocks RTT learning, and
+the minimum packet counts are close to the broad sampling behavior of 3.6.4.
 
 `lotserver_loss_adapt_pct` can be changed while the module is running. Lower
 values admit more persistently lossy connections; higher values are stricter.

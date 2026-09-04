@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.5 Mux-aware moderate-loss adaptive edition
+// lotspeed.c - v3.10.6 broad Mux-sampling adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -41,8 +41,8 @@
 #define LOTSPEED_MUX_IDLE_RESET_MS 10000
 #define LOTSPEED_MUX_ACTIVE_PCT 10
 #define LOTSPEED_MUX_LOW_WINDOWS 2
-#define LOTSPEED_LOSS_MIN_DELIVERED 8
-#define LOTSPEED_CONGEST_MIN_DELIVERED 32
+#define LOTSPEED_LOSS_MIN_DELIVERED 1
+#define LOTSPEED_CONGEST_MIN_DELIVERED 8
 #define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
 #define LOTSPEED_LOSS_ADAPT_SAMPLES 8
 
@@ -68,13 +68,13 @@ static unsigned int lotserver_probe_rtt_interval_ms = 300000;
 static unsigned int lotserver_probe_rtt_duration_ms = 100;
 static unsigned int lotserver_probe_rtt_cwnd_pct = 75;
 static unsigned int lotserver_min_rtt_window_sec = 30;
-static unsigned int lotserver_rtt_tolerance_pct = 120;
+static unsigned int lotserver_rtt_tolerance_pct = 80;
 static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
-static unsigned int lotserver_loss_congest_pct = 40;
-static unsigned int lotserver_loss_recover_pct = 30;
-static unsigned int lotserver_loss_adapt_pct = 6;
-static unsigned int lotserver_rtt_confirm_samples = 40;
+static unsigned int lotserver_loss_congest_pct = 30;
+static unsigned int lotserver_loss_recover_pct = 25;
+static unsigned int lotserver_loss_adapt_pct = 5;
+static unsigned int lotserver_rtt_confirm_samples = 20;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
 static bool lotserver_hd_enable = false;
@@ -925,17 +925,17 @@ static bool lotspeed_update_round_model(struct sock *sk,
         path_delivered >= LOTSPEED_LOSS_MIN_DELIVERED &&
         elapsed_us > 0 &&
         elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
-    rtt_qualified_round = !rs->is_app_limited &&
-                          path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
-                          elapsed_us > 0 &&
-                          elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+    rtt_qualified_round =
+        path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
+        elapsed_us > 0 &&
+        elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
     lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
                               loss_qualified_round,
                               rtt_qualified_round);
     return true;
 }
 
-// --- v3.10.5 core: Mux-aware sustained-loss adaptation ---
+// --- v3.10.6 core: broad Mux sampling with sustained-loss adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1350,7 +1350,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.5 - Mux loss adaptive               ║\n");
+    pr_info("║    LotSpeed v3.10.6 - broad Mux adaptive              ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1425,7 +1425,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.5 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.6 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1441,6 +1441,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.5-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.5 - Mux-aware moderate-loss adaptive control");
+MODULE_VERSION("3.10.6-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.6 - broad Mux sampling adaptive control");
 MODULE_ALIAS("tcp_lotspeed");
