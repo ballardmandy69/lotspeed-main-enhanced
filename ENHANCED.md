@@ -1,16 +1,17 @@
-# LotSpeed 3.10.6 Enhanced
+# LotSpeed 3.10.7 Enhanced
 
-LotSpeed 3.10.6 builds on the congestion-gated adaptive model from the 3.6.4
-`mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
+LotSpeed 3.10.7 builds on the congestion-gated adaptive model from the 3.6.4
+`mux-throughput` profile. Its floor follows 50% of the configured ceiling, it
 restores broad Mux loss and RTT visibility, and clears stale per-connection
-learning after sustained low Mux traffic. EWMA and eight-round confirmation
-remain in place to reject isolated spikes.
+learning after sustained low Mux traffic. The main profile now uses a 360 Mbps
+ceiling, 2.6x CWND gain, and a 4% sustained moderate-loss threshold. EWMA and
+eight-round confirmation remain in place to reject isolated spikes.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3106.sh | sudo bash
-sudo lotspeed preset mux-throughput
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3107.sh | bash
+lotspeed preset mux-throughput
 lotspeed status
 ```
 
@@ -18,9 +19,9 @@ lotspeed status
 
 | Parameter | Value |
 | --- | ---: |
-| `lotserver_rate` | `32000000` bytes/s (256 Mbps) |
-| `lotserver_min_rate_pct` | `60` percent of ceiling |
-| `lotserver_gain` | `30` (3.0x) |
+| `lotserver_rate` | `45000000` bytes/s (360 Mbps) |
+| `lotserver_min_rate_pct` | `50` percent of ceiling |
+| `lotserver_gain` | `26` (2.6x) |
 | `lotserver_beta` | `871` (about 85% retained) |
 | `lotserver_min_cwnd` | `32` packets |
 | `lotserver_max_cwnd` | `10000` packets |
@@ -30,7 +31,7 @@ lotspeed status
 | `lotserver_rtt_tolerance_pct` | `80` percent |
 | `lotserver_loss_congest_pct` | `30` percent |
 | `lotserver_loss_recover_pct` | `25` percent |
-| `lotserver_loss_adapt_pct` | `5` percent |
+| `lotserver_loss_adapt_pct` | `4` percent |
 | `lotserver_rtt_confirm_samples` | `20` rounds |
 | `lotserver_loss_guard` | `1` |
 | `lotserver_noncong_beta` | `1000` |
@@ -38,12 +39,12 @@ lotspeed status
 
 ## Dynamic rate
 
-Outside congestion avoidance, the target remains 256 Mbps. Stable paths use
+Outside congestion avoidance, the target remains 360 Mbps. Stable paths use
 120% pacing, jittery paths use at most 110% pacing, and confirmed congested
 paths use 100% pacing. During confirmed congestion the target becomes:
 
 ```text
-clamp(smoothed ACK arrival rate * 1.05, rate * 60%, rate)
+clamp(smoothed ACK arrival rate * 1.05, rate * 50%, rate)
 ```
 
 The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
@@ -53,9 +54,9 @@ than two seconds. RTT evidence needs at least eight delivered packets over the
 same maximum interval. Both accept `app_limited` Mux rounds.
 Adaptation requires a 30% loss EWMA, 20 qualified rounds above the RTT
 threshold with at least 25% loss EWMA, or sustained moderate loss. The
-moderate path requires a round-aligned loss EWMA of at least 5% for eight
+moderate path requires a round-aligned loss EWMA of at least 4% for eight
 accumulated qualified rounds. The evidence is held while EWMA is between about
-3.75% and 5%, then decays by two per qualified round below about 3.75%. The RTT
+3% and 4%, then decays by two per qualified round below about 3%. The RTT
 threshold is the measured base RTT plus 80% and a jitter allowance. A single
 RTO still reduces cwnd but cannot lower the target rate by itself. Once
 congestion clears for 250 ms, the target returns to the configured ceiling.
@@ -78,7 +79,7 @@ connections into adaptive mode.
 Each TCP connection has a five-second activity window. Two consecutive windows
 below 10% of the configured ceiling clear the ACK-rate estimate, loss EWMA,
 moderate-loss and RTT-congestion evidence, avoidance state, and adaptive
-target. With the main profile the threshold is 25.6 Mbps and the reset takes
+target. With the main profile the threshold is 36 Mbps and the reset takes
 10 seconds. A truly idle connection is also reset when transmission restarts
 after 10 seconds.
 
@@ -89,7 +90,7 @@ later transfer.
 ## Visibility
 
 ```bash
-sudo lotspeed rate-status
+lotspeed rate-status
 ```
 
 This on-demand command separates sockets that transmitted during the last ten

@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.6 broad Mux-sampling adaptive edition
+// lotspeed.c - v3.10.7 360 Mbps balanced Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -54,9 +54,9 @@
 #endif
 
 // --- 可调参数 ---
-static unsigned long lotserver_rate = 32000000ULL;   // 256Mbps per-flow ceiling
-static unsigned int lotserver_min_rate_pct = 60;     // percent of rate ceiling
-static unsigned int lotserver_gain = 30;               // 3.0x default gain
+static unsigned long lotserver_rate = 45000000ULL;   // 360Mbps per-flow ceiling
+static unsigned int lotserver_min_rate_pct = 50;     // percent of rate ceiling
+static unsigned int lotserver_gain = 26;               // 2.6x default gain
 static unsigned int lotserver_min_cwnd = 32;           // 最小拥塞窗口
 static unsigned int lotserver_max_cwnd = 10000;        // 最大拥塞窗口
 static unsigned int lotserver_beta = 871;              // about 85% cwnd retained
@@ -73,7 +73,7 @@ static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
 static unsigned int lotserver_loss_congest_pct = 30;
 static unsigned int lotserver_loss_recover_pct = 25;
-static unsigned int lotserver_loss_adapt_pct = 5;
+static unsigned int lotserver_loss_adapt_pct = 4;
 static unsigned int lotserver_rtt_confirm_samples = 20;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
@@ -343,7 +343,7 @@ static const struct kernel_param_ops param_ops_seconds = { .set = param_set_seco
 
 // --- 注册参数 ---
 module_param_cb(lotserver_rate, &param_ops_rate, &lotserver_rate, 0644);
-MODULE_PARM_DESC(lotserver_rate, "Target rate in bytes/sec (default 256Mbps)");
+MODULE_PARM_DESC(lotserver_rate, "Target rate in bytes/sec (default 360Mbps)");
 
 module_param_cb(lotserver_min_rate_pct, &param_ops_floor_percent,
                 &lotserver_min_rate_pct, 0644);
@@ -351,7 +351,7 @@ MODULE_PARM_DESC(lotserver_min_rate_pct,
                  "Minimum adaptive rate as percent of rate ceiling");
 
 module_param_cb(lotserver_gain, &param_ops_gain, &lotserver_gain, 0644);
-MODULE_PARM_DESC(lotserver_gain, "Gain multiplier x10 (default 30 = 3.0x)");
+MODULE_PARM_DESC(lotserver_gain, "Gain multiplier x10 (default 26 = 2.6x)");
 
 module_param_cb(lotserver_min_cwnd, &param_ops_min_cwnd, &lotserver_min_cwnd, 0644);
 MODULE_PARM_DESC(lotserver_min_cwnd, "Minimum congestion window");
@@ -935,7 +935,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10.6 core: broad Mux sampling with sustained-loss adaptation ---
+// --- v3.10.7 core: 360 Mbps balanced Mux adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1350,7 +1350,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.6 - broad Mux adaptive              ║\n");
+    pr_info("║    LotSpeed v3.10.7 - 360 Mbps balanced Mux           ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1425,7 +1425,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.6 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.7 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1441,6 +1441,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.6-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.6 - broad Mux sampling adaptive control");
+MODULE_VERSION("3.10.7-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.7 - 360 Mbps balanced Mux adaptive control");
 MODULE_ALIAS("tcp_lotspeed");

@@ -1,21 +1,21 @@
-# LotSpeed 3.10.6 Enhanced
+# LotSpeed 3.10.7 Enhanced
 
-本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 60%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.6 恢复接近 3.6.4 的 MUX 丢包与 RTT 采样范围，同时保留 EWMA、8 轮确认和快速恢复。
+本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 50%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.7 将主配置调整为 360 Mbps、2.6x CWND gain 和 4% 持续中度丢包门槛，其余 MUX 采样、EWMA、8 轮确认和快速恢复逻辑不变。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3106.sh | sudo bash
-sudo lotspeed preset mux-throughput
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3107.sh | bash
+lotspeed preset mux-throughput
 lotspeed status
 ```
 
 ## 主配置
 
 ```text
-lotserver_rate=32000000          # 256 Mbps 上限
-lotserver_min_rate_pct=60        # 下限为 rate 的 60%
-lotserver_gain=30                # 3.0x
+lotserver_rate=45000000          # 360 Mbps 上限
+lotserver_min_rate_pct=50        # 下限为 rate 的 50%
+lotserver_gain=26                # 2.6x
 lotserver_beta=871               # 拥塞时保留约 85%
 lotserver_min_cwnd=32
 lotserver_max_cwnd=10000
@@ -25,14 +25,14 @@ lotserver_min_flight_ms=250
 lotserver_rtt_tolerance_pct=80
 lotserver_loss_congest_pct=30
 lotserver_loss_recover_pct=25
-lotserver_loss_adapt_pct=5
+lotserver_loss_adapt_pct=4
 lotserver_rtt_confirm_samples=20
 lotserver_loss_guard=1
 lotserver_noncong_beta=1000
 lotserver_hd_enable=0
 ```
 
-`adaptive=0` 时固定使用 256 Mbps 目标。`adaptive=1` 时只在确认拥塞的 `AVOIDING` 状态中动态调整，其余状态立即恢复 256 Mbps。
+`adaptive=0` 时固定使用 360 Mbps 目标。`adaptive=1` 时只在确认拥塞的 `AVOIDING` 状态中动态调整，其余状态立即恢复 360 Mbps。
 
 ## 动态调速
 
@@ -42,8 +42,8 @@ lotserver_hd_enable=0
 
 ```text
 动态目标 = clamp(平滑 ACK 到达速率 × 1.05,
-                 lotserver_rate × 60%,
-                 256 Mbps)
+                 lotserver_rate × 50%,
+                 360 Mbps)
 ```
 
 丢包与 RTT 使用独立的合格样本门控。
@@ -67,21 +67,21 @@ RTT 学习条件：
 或
 RTT 相对基线膨胀超过 80%，持续 20 个轮次，且丢包 EWMA >= 25%
 或
-同一 RTT 窗口的丢包 EWMA >= 5%，连续累计 8 个合格轮次
+同一 RTT 窗口的丢包 EWMA >= 4%，连续累计 8 个合格轮次
 ```
 
-每个 packet-timed RTT 分别保存累计 delivered 和 lost 的起止快照，EWMA 的分子、分母来自同一窗口。EWMA 在约 3.75%～5% 之间时保持中度证据，降到约 3.75% 以下时每个合格轮次扣除两个证据，因此偶发丢包不会直接触发。短暂清空发送队列不会阻止长期 MUX 的丢包或 RTT 学习。`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 256 Mbps 目标。默认主配置的动态范围是 153.6～256 Mbps；如果把上限设置为 416 Mbps，下限会自动变为 249.6 Mbps。
+每个 packet-timed RTT 分别保存累计 delivered 和 lost 的起止快照，EWMA 的分子、分母来自同一窗口。EWMA 在约 3%～4% 之间时保持中度证据，降到约 3% 以下时每个合格轮次扣除两个证据，因此偶发丢包不会直接触发。短暂清空发送队列不会阻止长期 MUX 的丢包或 RTT 学习。`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 360 Mbps 目标。默认主配置的动态范围是 180～360 Mbps。
 
 `lotserver_loss_adapt_pct` 可以在线调整。调低会让更多持续丢包连接进入 adapt，调高则更严格；它按连接质量工作，不会强制凑出固定比例：
 
 ```bash
-sudo lotspeed set lotserver_loss_adapt_pct 3  # 更积极
-sudo lotspeed set lotserver_loss_adapt_pct 7  # 更保守
+lotspeed set lotserver_loss_adapt_pct 3  # 更积极
+lotspeed set lotserver_loss_adapt_pct 7  # 更保守
 ```
 
 ## MUX 低流量重置
 
-内核每 5 秒检查每条 TCP 的实际发送量。以 256 Mbps 主配置计算，低流量门槛是上限的 10%，即 25.6 Mbps。
+内核每 5 秒检查每条 TCP 的实际发送量。以 360 Mbps 主配置计算，低流量门槛是上限的 10%，即 36 Mbps。
 
 连续两个窗口，也就是 10 秒低于该门槛后，清除：
 
@@ -89,12 +89,12 @@ sudo lotspeed set lotserver_loss_adapt_pct 7  # 更保守
 - 丢包 EWMA、中度丢包证据与 RTT 拥塞计数
 - `AVOIDING` 状态与动态目标
 
-目标立即恢复 256 Mbps。后续同一条 MUX TCP 重新出现大流量时，使用新的 ACK 样本重新学习，不继承上一次弱网传输的低速结果。完全空闲超过 10 秒后重新发送也会立即重置。
+目标立即恢复 360 Mbps。后续同一条 MUX TCP 重新出现大流量时，使用新的 ACK 样本重新学习，不继承上一次弱网传输的低速结果。完全空闲超过 10 秒后重新发送也会立即重置。
 
 ## 速率统计
 
 ```bash
-sudo lotspeed rate-status
+lotspeed rate-status
 ```
 
 该命令只扫描当前网络命名空间的已建立 LotSpeed 连接。最近 10 秒发送过数据的连接分别统计为 `ACTIVE_FULL_120`、`ACTIVE_JITTERY_110` 和 `ACTIVE_ADAPTIVE_100`；空闲或停滞连接及其旧 adaptive pacing 单独列出。`guard-status` 保留为兼容别名。

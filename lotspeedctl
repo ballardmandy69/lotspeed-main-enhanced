@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.6 enhanced management utility
+# LotSpeed v3.10.7 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.6-enhanced"
+VERSION="3.10.7-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -163,9 +163,9 @@ apply_preset() {
     case "${preset}" in
         domestic-mixed|domestic|mux-throughput|mux|wan-enhanced|main-guarded)
             # Mux profile with sustained moderate-loss adaptive control.
-            write_param lotserver_rate 32000000
-            write_param lotserver_min_rate_pct 60
-            write_param lotserver_gain 30
+            write_param lotserver_rate 45000000
+            write_param lotserver_min_rate_pct 50
+            write_param lotserver_gain 26
             write_param lotserver_beta 871
             write_param lotserver_min_cwnd 32
             write_param lotserver_max_cwnd 10000
@@ -181,7 +181,7 @@ apply_preset() {
             write_param lotserver_avoid_hold_ms 250
             write_param lotserver_loss_congest_pct 30
             write_param lotserver_loss_recover_pct 25
-            write_param lotserver_loss_adapt_pct 5
+            write_param lotserver_loss_adapt_pct 4
             write_param lotserver_rtt_confirm_samples 20
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
