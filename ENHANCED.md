@@ -1,15 +1,15 @@
-# LotSpeed 3.10.4 Enhanced
+# LotSpeed 3.10.5 Enhanced
 
-LotSpeed 3.10.4 builds on the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.5 builds on the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 60% of the configured ceiling, it
-aligns delivered and lost counters to one packet-timed RTT window, adapts on
-severe congestion or sustained moderate loss, and clears stale per-connection
-learning after sustained low Mux traffic.
+restores loss visibility for intermittently written Mux connections, keeps RTT
+classification strict, and clears stale per-connection learning after
+sustained low Mux traffic.
 
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3104.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3105.sh | sudo bash
 sudo lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -47,8 +47,11 @@ clamp(smoothed ACK arrival rate * 1.05, rate * 60%, rate)
 ```
 
 The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
-sample. Only a non-`app_limited` sample with at least 32 delivered packets and
-an interval no longer than two seconds can update the congestion classifier.
+sample. Loss and RTT classification have separate eligibility gates. A loss
+sample needs at least eight delivered packets in a packet-timed RTT no longer
+than two seconds, and may be `app_limited`. RTT evidence still requires a
+non-`app_limited` round with at least 32 delivered packets and the same maximum
+interval.
 Adaptation requires a 40% loss EWMA, 40 qualified rounds above the RTT
 threshold with at least 30% loss EWMA, or sustained moderate loss. The
 moderate path requires a round-aligned loss EWMA of at least 6% for eight
@@ -62,6 +65,10 @@ Unlike 3.10.3, the loss numerator is no longer the loss newly marked by only
 the current ACK. Both delivered and cumulative lost deltas now span the same
 packet-timed RTT, preventing sustained loss from being diluted by a mismatched
 delivery interval.
+
+Unlike 3.10.4, a temporary empty send queue no longer discards an otherwise
+valid Mux loss sample. The relaxed gate applies only to loss learning; it does
+not make RTT jitter classification more aggressive.
 
 `lotserver_loss_adapt_pct` can be changed while the module is running. Lower
 values admit more persistently lossy connections; higher values are stricter.
