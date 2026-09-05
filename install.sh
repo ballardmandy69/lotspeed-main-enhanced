@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.10.7 enhanced installer
+# LotSpeed v3.10.8 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3107.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3108.sh | bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.10.7}"
+GITHUB_REF="${LOTSPEED_REF:-v3.10.8}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.10.7-enhanced"
+VERSION="3.10.8-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -122,6 +122,7 @@ validate_built_module() {
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
         lotserver_loss_adapt_pct
+        lotserver_loss_adapt_samples
         lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
@@ -140,7 +141,7 @@ validate_built_module() {
             fail "Built module is missing ${parameter}. Refusing to install an incomplete module."
     done
 
-    info "Validated module ${built_version} and v3.10.7 parameter set."
+    info "Validated module ${built_version} and v3.10.8 parameter set."
 }
 
 choose_fallback_cc() {
@@ -170,6 +171,7 @@ install_module() {
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
         lotserver_loss_adapt_pct
+        lotserver_loss_adapt_samples
         lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta

@@ -11,13 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh install-v310.sh install-v3101.sh install-v3102.sh install-v3103.sh install-v3104.sh install-v3105.sh install-v3106.sh install-v3107.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.10.7-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.10.7-enhanced"' install.sh
-          grep -q 'VERSION="3.10.7-enhanced"' lotspeedctl
+          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh install-v310.sh install-v3101.sh install-v3102.sh install-v3103.sh install-v3104.sh install-v3105.sh install-v3106.sh install-v3107.sh install-v3108.sh lotspeedctl
+          grep -q 'MODULE_VERSION("3.10.8-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.10.8-enhanced"' install.sh
+          grep -q 'VERSION="3.10.8-enhanced"' lotspeedctl
           grep -q 'static unsigned long lotserver_rate = 45000000ULL' lotspeed.c
           grep -q 'static unsigned int lotserver_gain = 26' lotspeed.c
-          grep -q 'static unsigned int lotserver_loss_adapt_pct = 4' lotspeed.c
+          grep -q 'static unsigned int lotserver_loss_adapt_pct = 3' lotspeed.c
+          grep -q 'static unsigned int lotserver_loss_adapt_samples = 5' lotspeed.c
           grep -q 'write_param lotserver_rate 45000000' lotspeedctl
           grep -q 'write_param lotserver_min_rate_pct 50' lotspeedctl
           grep -q 'write_param lotserver_gain 26' lotspeedctl
@@ -28,7 +29,8 @@ jobs:
           grep -q 'write_param lotserver_rtt_tolerance_pct 80' lotspeedctl
           grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
           grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
-          grep -q 'write_param lotserver_loss_adapt_pct 4' lotspeedctl
+          grep -q 'write_param lotserver_loss_adapt_pct 3' lotspeedctl
+          grep -q 'write_param lotserver_loss_adapt_samples 5' lotspeedctl
           grep -q 'write_param lotserver_rtt_confirm_samples 20' lotspeedctl
           grep -q 'LOTSPEED_MUX_WINDOW_MS 5000' lotspeed.c
           grep -q 'LOTSPEED_MUX_ACTIVE_PCT 10' lotspeed.c
@@ -42,8 +44,10 @@ jobs:
           grep -q 'lotspeed_scale_percent(ca->actual_rate, 105)' lotspeed.c
           grep -q 'LOTSPEED_CONGEST_MIN_DELIVERED 8' lotspeed.c
           grep -q 'LOTSPEED_CONGEST_MAX_SAMPLE_US' lotspeed.c
-          grep -q 'LOTSPEED_LOSS_ADAPT_SAMPLES 8' lotspeed.c
           grep -q 'lotserver_loss_adapt_pct' lotspeed.c
+          grep -q 'module_param_cb(lotserver_loss_adapt_samples' lotspeed.c
+          grep -q 'ca->loss_adapt_count < lotserver_loss_adapt_samples' lotspeed.c
+          grep -q 'ca->loss_adapt_count >= lotserver_loss_adapt_samples' lotspeed.c
           grep -q 'loss_adapt_count' lotspeed.c
           grep -q 'losses = tp->lost - ca->round_lost' lotspeed.c
           grep -q 'path_delivered = delivered' lotspeed.c

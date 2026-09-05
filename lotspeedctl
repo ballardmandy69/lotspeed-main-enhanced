@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.7 enhanced management utility
+# LotSpeed v3.10.8 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.7-enhanced"
+VERSION="3.10.8-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -118,6 +118,7 @@ set_common_safety() {
     write_param lotserver_loss_congest_pct 20
     write_param lotserver_loss_recover_pct 8
     write_param lotserver_loss_adapt_pct 8
+    write_param lotserver_loss_adapt_samples 8
     write_param lotserver_rtt_confirm_samples 12
     write_param lotserver_loss_guard 1
     write_param lotserver_noncong_beta 972
@@ -148,6 +149,7 @@ apply_preset() {
         lotserver_loss_congest_pct
         lotserver_loss_recover_pct
         lotserver_loss_adapt_pct
+        lotserver_loss_adapt_samples
         lotserver_rtt_confirm_samples
         lotserver_loss_guard
         lotserver_noncong_beta
@@ -181,7 +183,8 @@ apply_preset() {
             write_param lotserver_avoid_hold_ms 250
             write_param lotserver_loss_congest_pct 30
             write_param lotserver_loss_recover_pct 25
-            write_param lotserver_loss_adapt_pct 4
+            write_param lotserver_loss_adapt_pct 3
+            write_param lotserver_loss_adapt_samples 5
             write_param lotserver_rtt_confirm_samples 20
             write_param lotserver_noncong_beta 1000
             write_param lotserver_hd_enable 0
@@ -317,6 +320,9 @@ show_status() {
                 ;;
             lotserver_min_rate_pct)
                 printf '  %-32s %s%% of rate\n' "${name}" "${value}"
+                ;;
+            lotserver_loss_adapt_samples|lotserver_rtt_confirm_samples)
+                printf '  %-32s %s qualified rounds\n' "${name}" "${value}"
                 ;;
             lotserver_gain)
                 printf '  %-32s %s (%d.%dx cwnd gain)\n' \

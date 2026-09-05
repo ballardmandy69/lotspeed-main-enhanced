@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.7 360 Mbps balanced Mux adaptive edition
+// lotspeed.c - v3.10.8 runtime-tunable Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -44,7 +44,6 @@
 #define LOTSPEED_LOSS_MIN_DELIVERED 1
 #define LOTSPEED_CONGEST_MIN_DELIVERED 8
 #define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
-#define LOTSPEED_LOSS_ADAPT_SAMPLES 8
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -73,7 +72,8 @@ static unsigned int lotserver_min_flight_ms = 250;
 static unsigned int lotserver_avoid_hold_ms = 250;
 static unsigned int lotserver_loss_congest_pct = 30;
 static unsigned int lotserver_loss_recover_pct = 25;
-static unsigned int lotserver_loss_adapt_pct = 4;
+static unsigned int lotserver_loss_adapt_pct = 3;
+static unsigned int lotserver_loss_adapt_samples = 5;
 static unsigned int lotserver_rtt_confirm_samples = 20;
 static bool lotserver_loss_guard = true;
 static unsigned int lotserver_noncong_beta = 1000;
@@ -406,6 +406,11 @@ module_param_cb(lotserver_loss_adapt_pct, &param_ops_loss_adapt, &lotserver_loss
 MODULE_PARM_DESC(lotserver_loss_adapt_pct,
                  "Moderate loss EWMA percent sustained before adaptive mode");
 
+module_param_cb(lotserver_loss_adapt_samples, &param_ops_confirm_rounds,
+                &lotserver_loss_adapt_samples, 0644);
+MODULE_PARM_DESC(lotserver_loss_adapt_samples,
+                 "Qualified moderate-loss rounds required before adaptive mode");
+
 module_param_cb(lotserver_rtt_confirm_samples, &param_ops_confirm_rounds, &lotserver_rtt_confirm_samples, 0644);
 MODULE_PARM_DESC(lotserver_rtt_confirm_samples, "Packet-timed RTT rounds required for congestion");
 
@@ -715,7 +720,7 @@ static void lotspeed_update_path_mode(struct sock *sk,
     /* EWMA smooths burst loss; hysteresis keeps borderline rounds neutral. */
     if (loss_qualified) {
         if (ca->loss_ewma >= loss_adapt) {
-            if (ca->loss_adapt_count < LOTSPEED_LOSS_ADAPT_SAMPLES)
+            if (ca->loss_adapt_count < lotserver_loss_adapt_samples)
                 ca->loss_adapt_count++;
         } else if (ca->loss_ewma <= loss_adapt_recover) {
             ca->loss_adapt_count = ca->loss_adapt_count > 2 ?
@@ -724,7 +729,7 @@ static void lotspeed_update_path_mode(struct sock *sk,
     }
 
     if (ca->loss_ewma >= loss_congest ||
-        ca->loss_adapt_count >= LOTSPEED_LOSS_ADAPT_SAMPLES ||
+        ca->loss_adapt_count >= lotserver_loss_adapt_samples ||
         (ca->rtt_high_count >= lotserver_rtt_confirm_samples &&
          ca->loss_ewma >= loss_recover)) {
         ca->path_mode = PATH_CONGESTED;
@@ -935,7 +940,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10.7 core: 360 Mbps balanced Mux adaptation ---
+// --- v3.10.8 core: runtime-tunable Mux adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1350,7 +1355,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.7 - 360 Mbps balanced Mux           ║\n");
+    pr_info("║    LotSpeed v3.10.8 - tunable Mux adaptation          ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1396,7 +1401,7 @@ static int __init lotspeed_module_init(void)
     pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
     pr_info("  Congestion: loss %u%%/%u%% | moderate %u%% for %u rounds\n",
             lotserver_loss_congest_pct, lotserver_loss_recover_pct,
-            lotserver_loss_adapt_pct, LOTSPEED_LOSS_ADAPT_SAMPLES);
+            lotserver_loss_adapt_pct, lotserver_loss_adapt_samples);
     pr_info("  RTT Congestion: +%u%% for %u rounds\n",
             lotserver_rtt_tolerance_pct, lotserver_rtt_confirm_samples);
     pr_info("  Loss Guard: %s | High Delay: %s (%uus, +%u%% gain)\n",
@@ -1425,7 +1430,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.7 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.8 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1441,6 +1446,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.7-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.7 - 360 Mbps balanced Mux adaptive control");
+MODULE_VERSION("3.10.8-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.8 - runtime-tunable Mux adaptive control");
 MODULE_ALIAS("tcp_lotspeed");
