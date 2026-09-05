@@ -31,7 +31,7 @@ parameters = SOURCE[SOURCE.index("static unsigned long lotserver_rate"):
 state = SOURCE[SOURCE.index("enum lotspeed_state {"):
                SOURCE.index("static const char* state_to_str")]
 functions = [
-    "lotspeed_rtt_inflated", "lotspeed_update_path_mode",
+    "lotspeed_scale_percent", "lotspeed_rtt_inflated", "lotspeed_update_path_mode",
     "lotspeed_sample_loss", "lotspeed_reset_mux_history",
     "lotspeed_update_mux_activity", "lotspeed_update_round_model",
     "lotspeed_cwnd_event",
