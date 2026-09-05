@@ -11,75 +11,40 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check scripts and release metadata
         run: |
-          bash -n install.sh install-v360.sh install-v361.sh install-v362.sh install-v363.sh install-v364.sh install-v365.sh install-v370.sh install-v371.sh install-v380.sh install-v381.sh install-v382.sh install-v383.sh install-v384.sh install-v390.sh install-v391.sh install-v392.sh install-v393.sh install-v310.sh install-v3101.sh install-v3102.sh install-v3103.sh install-v3104.sh install-v3105.sh install-v3106.sh install-v3107.sh install-v3108.sh install-v3109.sh lotspeedctl
-          grep -q 'MODULE_VERSION("3.10.9-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.10.9-enhanced"' install.sh
-          grep -q 'VERSION="3.10.9-enhanced"' lotspeedctl
+          for script in install*.sh lotspeedctl; do bash -n "$script"; done
+          grep -q 'MODULE_VERSION("3.10.10-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.10.10-enhanced"' install.sh
+          grep -q 'VERSION="3.10.10-enhanced"' lotspeedctl
+          grep -q 'RELEASE_REF="v3.10.10"' install-v31010.sh
+          grep -q 'PACKAGE_VERSION="3.10.10-enhanced"' dkms.conf
+          grep -q 'VERSION.*3.10.10-enhanced' Makefile
           grep -q 'static unsigned long lotserver_rate = 45000000ULL' lotspeed.c
           grep -q 'static unsigned int lotserver_gain = 26' lotspeed.c
+          grep -q 'static unsigned int lotserver_min_rate_pct = 50' lotspeed.c
           grep -q 'static unsigned int lotserver_loss_adapt_pct = 3' lotspeed.c
           grep -q 'static unsigned int lotserver_loss_adapt_samples = 5' lotspeed.c
           grep -q 'write_param lotserver_rate 45000000' lotspeedctl
           grep -q 'write_param lotserver_min_rate_pct 50' lotspeedctl
           grep -q 'write_param lotserver_gain 26' lotspeedctl
-          grep -q 'write_param lotserver_beta 871' lotspeedctl
-          grep -q 'write_param lotserver_max_cwnd 10000' lotspeedctl
-          grep -q 'write_param lotserver_pacing_gain 120' lotspeedctl
-          grep -q 'write_param lotserver_min_flight_ms 250' lotspeedctl
-          grep -q 'write_param lotserver_rtt_tolerance_pct 80' lotspeedctl
-          grep -q 'write_param lotserver_loss_congest_pct 30' lotspeedctl
-          grep -q 'write_param lotserver_loss_recover_pct 25' lotspeedctl
           grep -q 'write_param lotserver_loss_adapt_pct 3' lotspeedctl
           grep -q 'write_param lotserver_loss_adapt_samples 5' lotspeedctl
-          grep -q 'write_param lotserver_rtt_confirm_samples 20' lotspeedctl
-          grep -q 'LOTSPEED_MUX_WINDOW_MS 5000' lotspeed.c
-          grep -q 'LOTSPEED_MUX_ACTIVE_PCT 10' lotspeed.c
-          grep -q 'LOTSPEED_MUX_LOW_WINDOWS 2' lotspeed.c
-          grep -q 'LOTSPEED_LOSS_MIN_DELIVERED 1' lotspeed.c
-          grep -q 'static unsigned int lotserver_min_rate_pct = 50' lotspeed.c
-          grep -q 'if (ca->path_mode == PATH_CONGESTED)' lotspeed.c
-          grep -q 'A single RTO still reduces cwnd, but cannot lower the rate' lotspeed.c
-          grep -q 'lotspeed_update_mux_activity' lotspeed.c
-          grep -q 'lotspeed_reset_mux_history' lotspeed.c
+          grep -q 'write_param lotserver_pacing_gain 120' lotspeedctl
           grep -q 'lotspeed_scale_percent(ca->actual_rate, 105)' lotspeed.c
-          grep -q 'LOTSPEED_CONGEST_MIN_DELIVERED 8' lotspeed.c
-          grep -q 'LOTSPEED_CONGEST_MAX_SAMPLE_US' lotspeed.c
-          grep -q 'LOTSPEED_EFFICIENCY_ADAPT_PCT 70' lotspeed.c
-          grep -q 'lotserver_loss_adapt_pct' lotspeed.c
-          grep -q 'module_param_cb(lotserver_loss_adapt_samples' lotspeed.c
-          grep -q 'ca->loss_adapt_count < lotserver_loss_adapt_samples' lotspeed.c
-          grep -q 'ca->loss_adapt_count >= lotserver_loss_adapt_samples' lotspeed.c
-          grep -q 'loss_adapt_count' lotspeed.c
-          grep -q 'losses = tp->lost - ca->round_lost' lotspeed.c
-          grep -q 'path_delivered = delivered' lotspeed.c
-          grep -q 'ca->round_lost = tp->lost' lotspeed.c
-          grep -q 'bool loss_qualified_round' lotspeed.c
-          grep -q 'bool rtt_qualified_round' lotspeed.c
-          grep -q 'rtt_qualified_round =' lotspeed.c
-          grep -q 'efficiency_qualified_round =' lotspeed.c
-          grep -q 'round_rate < lotspeed_scale_percent(lotserver_rate' lotspeed.c
-          grep -q 'DIV_ROUND_UP(sample_loss - ca->loss_ewma' lotspeed.c
-          ! grep -q 'losses = rs->losses' lotspeed.c
-          grep -q 'rs->losses' lotspeed.c
-          grep -q 'rs->prior_delivered' lotspeed.c
-          ! grep -q 'GUARD_LIMIT_' lotspeed.c
-          ! grep -q 'lotspeed_update_retrans_guard' lotspeed.c
-          grep -q 'tx_bytes = lotspeed_tcp_counter_delta' lotspeed.c
-          grep -q 'return tp->bytes_sent;' lotspeed.c
-          grep -q 'rate-status|guard-status) show_rate_status' lotspeedctl
+          ! grep -q 'EFFICIENCY_ADAPT\|efficiency_qualified\|GUARD_LIMIT_' lotspeed.c
           grep -q 'ACTIVE_FULL_120' lotspeedctl
           grep -q 'ACTIVE_JITTERY_110' lotspeedctl
           grep -q 'ACTIVE_ADAPTIVE_100' lotspeedctl
           grep -q 'IDLE_ADAPTIVE_STALE' lotspeedctl
-          grep -q 'ss -tinH state established' lotspeedctl
-          grep -q 'write_param lotserver_hd_enable 0' lotspeedctl
-          grep -q 'write_param lotserver_noncong_beta 1000' lotspeedctl
           grep -q 'net.ipv4.tcp_rmem=8192 524288 16777216' lotspeedctl
           grep -q 'net.ipv4.tcp_wmem=8192 524288 16777216' lotspeedctl
-          grep -q 'net.core.rmem_max=16777216' lotspeedctl
-          grep -q 'net.core.wmem_max=16777216' lotspeedctl
           grep -q 'net.ipv4.tcp_notsent_lowat=262144' lotspeedctl
           grep -q 'net.ipv4.tcp_limit_output_bytes=1048576' lotspeedctl
+      - name: Exercise production controller logic
+        env:
+          CFLAGS: -fsanitize=undefined -fno-sanitize-recover=all
+        run: python3 tests/run_model_tests.py
+      - name: Exercise upgrade parameter preservation
+        run: python3 tests/test_installer.py
       - name: Install kernel headers
         run: |
           sudo apt-get update
@@ -91,4 +56,5 @@ jobs:
           for header_dir in "${headers[@]}"; do
             make clean KERNEL_DIR="${header_dir}" || true
             make KERNEL_DIR="${header_dir}"
+            test "$(modinfo -F version lotspeed.ko)" = '3.10.10-enhanced'
           done

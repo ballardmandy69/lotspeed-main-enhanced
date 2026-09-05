@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# LotSpeed v3.10.9 enhanced installer
+# LotSpeed v3.10.10 enhanced installer
 # Repository: https://github.com/ballardmandy69/lotspeed-main-enhanced
 #
 # Local checkout:
 #   bash install.sh
 #
 # Pinned remote release:
-#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3109.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31010.sh | bash
 
 set -Eeuo pipefail
 
 GITHUB_REPO="${LOTSPEED_REPO:-ballardmandy69/lotspeed-main-enhanced}"
-GITHUB_REF="${LOTSPEED_REF:-v3.10.9}"
+GITHUB_REF="${LOTSPEED_REF:-v3.10.10}"
 INSTALL_DIR="${LOTSPEED_INSTALL_DIR:-/opt/lotspeed}"
 MODULE_NAME="lotspeed"
-VERSION="3.10.9-enhanced"
+VERSION="3.10.10-enhanced"
 KERNEL_RELEASE="$(uname -r)"
 MODULE_DEST="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/extra"
 LEGACY_MODULE="/lib/modules/${KERNEL_RELEASE}/kernel/net/ipv4/lotspeed.ko"
@@ -141,7 +141,7 @@ validate_built_module() {
             fail "Built module is missing ${parameter}. Refusing to install an incomplete module."
     done
 
-    info "Validated module ${built_version} and v3.10.9 parameter set."
+    info "Validated module ${built_version} and v3.10.10 parameter set."
 }
 
 choose_fallback_cc() {
@@ -157,7 +157,8 @@ choose_fallback_cc() {
 }
 
 install_module() {
-    local fallback loaded_version parameter
+    local fallback loaded_version parameter description value previous_cc
+    local -a saved_parameters=()
     local required_parameters=(
         lotserver_min_rate_pct
         lotserver_pacing_gain
@@ -181,10 +182,21 @@ install_module() {
     )
 
     if lsmod | awk '{print $1}' | grep -qx "${MODULE_NAME}"; then
+        # Preserve only parameters supported by the newly validated module.
+        while IFS=: read -r parameter description; do
+            [[ "${parameter}" =~ ^lotserver_[a-z0-9_]+$ ]] || continue
+            [[ -r "/sys/module/${MODULE_NAME}/parameters/${parameter}" ]] || continue
+            value="$(cat "/sys/module/${MODULE_NAME}/parameters/${parameter}")"
+            [[ "${value}" =~ ^([0-9]+|Y|N)$ ]] || continue
+            saved_parameters+=("${parameter}=${value}")
+        done < <(modinfo -p "${INSTALL_DIR}/lotspeed.ko")
+        previous_cc="$(sysctl -n net.ipv4.tcp_congestion_control)"
         fallback="$(choose_fallback_cc)"
         [[ -n "${fallback}" ]] && sysctl -w "net.ipv4.tcp_congestion_control=${fallback}" >/dev/null
-        rmmod "${MODULE_NAME}" ||
+        if ! rmmod "${MODULE_NAME}"; then
+            sysctl -w "net.ipv4.tcp_congestion_control=${previous_cc}" >/dev/null || true
             fail "The old module is still referenced. Close existing LotSpeed TCP connections and run the installer again."
+        fi
     fi
 
     rm -f "${LEGACY_MODULE}" "${LEGACY_MODULE}.xz" \
@@ -192,8 +204,18 @@ install_module() {
     install -d -m 0755 "${MODULE_DEST}"
     install -m 0644 "${INSTALL_DIR}/lotspeed.ko" "${MODULE_DEST}/lotspeed.ko"
     depmod -a
+    if [[ -f /etc/modprobe.d/lotspeed.conf ]]; then
+        cp -p /etc/modprobe.d/lotspeed.conf \
+            "/etc/modprobe.d/lotspeed.conf.pre-${VERSION}-$(date +%s)"
+    fi
     rm -f /etc/modprobe.d/lotspeed.conf
-    modprobe "${MODULE_NAME}"
+    if (( ${#saved_parameters[@]} )); then
+        printf 'options %s' "${MODULE_NAME}" > /etc/modprobe.d/lotspeed.conf
+        printf ' %s' "${saved_parameters[@]}" >> /etc/modprobe.d/lotspeed.conf
+        printf '\n' >> /etc/modprobe.d/lotspeed.conf
+        info "Preserved ${#saved_parameters[@]} running module parameters."
+    fi
+    modprobe "${MODULE_NAME}" "${saved_parameters[@]}"
 
     grep -qw "${MODULE_NAME}" /proc/sys/net/ipv4/tcp_available_congestion_control ||
         fail "The module loaded but did not register the lotspeed congestion control."
@@ -236,8 +258,9 @@ main() {
     install_management
 
     printf '\nLotSpeed %s installed successfully.\n' "${VERSION}"
-    printf 'Recommended preset for one-Mux-per-user traffic:\n'
-    printf '  lotspeed preset main-guarded\n'
+    printf 'Running module parameters were preserved when upgrading a loaded module.\n'
+    printf 'Optional: reset to the default AnyTLS/TCP profile (overwrites custom values):\n'
+    printf '  lotspeed preset mux-throughput\n'
     printf 'Check it with:\n'
     printf '  lotspeed status\n'
 }

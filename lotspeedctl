@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# LotSpeed v3.10.9 enhanced management utility
+# LotSpeed v3.10.10 enhanced management utility
 
 set -Eeuo pipefail
 
-VERSION="3.10.9-enhanced"
+VERSION="3.10.10-enhanced"
 MODULE_NAME="lotspeed"
 PARAM_DIR="/sys/module/${MODULE_NAME}/parameters"
 SYSCTL_FILE="/etc/sysctl.d/99-lotspeed.conf"
@@ -321,7 +321,10 @@ show_status() {
             lotserver_min_rate_pct)
                 printf '  %-32s %s%% of rate\n' "${name}" "${value}"
                 ;;
-            lotserver_loss_adapt_samples|lotserver_rtt_confirm_samples)
+            lotserver_loss_adapt_samples)
+                printf '  %-32s %s fresh-loss samples\n' "${name}" "${value}"
+                ;;
+            lotserver_rtt_confirm_samples)
                 printf '  %-32s %s qualified rounds\n' "${name}" "${value}"
                 ;;
             lotserver_gain)

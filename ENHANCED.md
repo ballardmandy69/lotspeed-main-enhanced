@@ -1,118 +1,99 @@
-# LotSpeed 3.10.9 Enhanced
+# LotSpeed 3.10.10 Enhanced
 
-LotSpeed 3.10.9 builds on the congestion-gated adaptive model from the 3.6.4
-`mux-throughput` profile. Its floor follows 50% of the configured ceiling, it
-restores broad Mux loss and RTT visibility, and clears stale per-connection
-learning after sustained low Mux traffic. The main profile uses a 360 Mbps
-ceiling, 2.6x CWND gain, and a 3% sustained moderate-loss threshold confirmed
-over five qualified rounds. Both values are runtime-tunable.
+This release fixes loss-evidence lifecycle and idle reuse handling on top of
+3.10.9. Control remains per underlying TCP, not per IP, AnyTLS substream, or a
+presumed one-TCP-per-user relationship.
 
 ## Install
 
+Run as root:
+
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3109.sh | bash
-lotspeed preset mux-throughput
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31010.sh | bash
 lotspeed status
-```
-
-## Main profile
-
-| Parameter | Value |
-| --- | ---: |
-| `lotserver_rate` | `45000000` bytes/s (360 Mbps) |
-| `lotserver_min_rate_pct` | `50` percent of ceiling |
-| `lotserver_gain` | `26` (2.6x) |
-| `lotserver_beta` | `871` (about 85% retained) |
-| `lotserver_min_cwnd` | `32` packets |
-| `lotserver_max_cwnd` | `10000` packets |
-| `lotserver_adaptive` | `1` |
-| `lotserver_pacing_gain` | `120` percent |
-| `lotserver_min_flight_ms` | `250` ms |
-| `lotserver_rtt_tolerance_pct` | `80` percent |
-| `lotserver_loss_congest_pct` | `30` percent |
-| `lotserver_loss_recover_pct` | `25` percent |
-| `lotserver_loss_adapt_pct` | `3` percent |
-| `lotserver_loss_adapt_samples` | `5` qualified rounds |
-| `lotserver_rtt_confirm_samples` | `20` rounds |
-| `lotserver_loss_guard` | `1` |
-| `lotserver_noncong_beta` | `1000` |
-| `lotserver_hd_enable` | `0` |
-
-## Dynamic rate
-
-Outside congestion avoidance, the target remains 360 Mbps. Stable paths use
-120% pacing, jittery paths use at most 110% pacing, and confirmed congested
-paths use 100% pacing. During confirmed congestion the target becomes:
-
-```text
-clamp(smoothed ACK arrival rate * 1.05, rate * 50%, rate)
-```
-
-The arrival estimate absorbs 25% of a higher sample and 12.5% of a lower
-sample. Loss and RTT classification have separate eligibility gates. A loss
-sample needs at least one delivered packet in a packet-timed RTT no longer
-than two seconds. RTT evidence needs at least eight delivered packets over the
-same maximum interval. Both accept `app_limited` Mux rounds.
-Adaptation requires a 30% loss EWMA, 20 qualified rounds above the RTT
-threshold with at least 25% loss EWMA, or sustained moderate loss. The
-moderate path requires a round-aligned loss EWMA of at least 3% for five
-accumulated qualified rounds. The evidence is held while EWMA is between about
-2.2% and 3%, then decays by two per qualified round below about 2.2%. The RTT
-threshold is the measured base RTT plus 80% and a jitter allowance. A single
-RTO still reduces cwnd but cannot lower the target rate by itself. Once
-congestion clears for 250 ms, the target returns to the configured ceiling.
-
-Unlike 3.10.3, the loss numerator is no longer the loss newly marked by only
-the current ACK. Both delivered and cumulative lost deltas now span the same
-packet-timed RTT, preventing sustained loss from being diluted by a mismatched
-delivery interval.
-
-Unlike 3.10.5, a temporary empty send queue no longer blocks RTT learning, and
-the minimum packet counts are close to the broad sampling behavior of 3.6.4.
-
-After startup, an active non-app-limited round with a retransmission and an
-ACK delivery rate below 70% of the configured ceiling also adds one moderate
-adaptation round. The Mux activity gate excludes traffic below the existing
-low-traffic reset threshold.
-
-`lotserver_loss_adapt_pct` and `lotserver_loss_adapt_samples` can be changed
-while the module is running and are persisted by `lotspeed set`. Lower values
-admit persistent loss sooner; higher values are stricter. The classifier
-remains quality-based and does not force a fixed percentage of connections
-into adaptive mode.
-
-## Low-traffic reset
-
-Each TCP connection has a five-second activity window. Two consecutive windows
-below 10% of the configured ceiling clear the ACK-rate estimate, loss EWMA,
-moderate-loss and RTT-congestion evidence, avoidance state, and adaptive
-target. With the main profile the threshold is 36 Mbps and the reset takes
-10 seconds. A truly idle connection is also reset when transmission restarts
-after 10 seconds.
-
-The reset is per TCP connection and does not affect other clients or use an IP
-address. It prevents a reused Mux from carrying a stale low-rate result into a
-later transfer.
-
-## Visibility
-
-```bash
 lotspeed rate-status
 ```
 
-This on-demand command separates sockets that transmitted during the last ten
-seconds into `ACTIVE_FULL_120`, `ACTIVE_JITTERY_110`, and
-`ACTIVE_ADAPTIVE_100`.
-Idle or stalled sockets, including stale adaptive pacing values, are shown
-separately. `guard-status` remains as a compatibility alias.
+Upgrades of a loaded module preserve supported runtime parameters and persist
+them in the module configuration. Do not apply a preset unless you intend to
+replace customized values. Offline configuration migration is not performed
+when the old module is not loaded. Busy modules are not forcibly unloaded;
+the previous default congestion algorithm is restored on unload failure.
+For a fresh installation, lotspeed preset mux-throughput applies the default
+module profile and buffer sysctls documented in README.md.
 
-## Mux buffers
+## Changes
 
-```text
-net.core.rmem_max=16777216
-net.core.wmem_max=16777216
-net.ipv4.tcp_rmem=8192 524288 16777216
-net.ipv4.tcp_wmem=8192 524288 16777216
-net.ipv4.tcp_notsent_lowat=262144
-net.ipv4.tcp_limit_output_bytes=1048576
-```
+- A separate paired delivered/lost snapshot is consumed only when eligible.
+  Zero elapsed ticks or no delivery retains evidence for the next sample.
+- Windows expire after two seconds without a qualifying sample. Expired loss
+  EWMA and counts are cleared; an invalid window is not a synthetic healthy
+  sample and does not itself clear the path classification.
+- Moderate confirmation requires threshold-crossing EWMA and newly marked
+  loss. One burst cannot keep increasing the count through old EWMA alone.
+- The supplemental entry based on ACK speed below 70% of target is removed.
+  No delivered/sent byte ratio replaces it.
+- Pending unsent or unacknowledged data prevents idle reset, regardless of
+  speed. A drained queue must be observed idle for about ten seconds before
+  the next callback/restart clears history. Short TX_START events preserve
+  loss snapshots. Recovery with no estimated flight is not treated as idle.
+
+The indicator is delta_lost / (delta_delivered + delta_lost), not actual
+retransmitted bytes, physical packet-loss probability, or remote application
+goodput. Loss needs at least one delivered packet and a nonzero interval of
+at most two seconds; RTT still needs eight packets over a nonzero interval
+of at most two seconds. Both accept app-limited traffic. The bandwidth
+estimator still rejects lower app-limited samples once it has an estimate.
+
+The moderate default remains 3% with five fresh-loss confirmations. At about
+2.2% or less, each qualified window removes two confirmations. Between
+thresholds, or above threshold without fresh loss, evidence is held until
+decay/expiry. Counts are accumulated, not strictly consecutive, and are not
+seconds. A samples setting of one intentionally permits one qualifying burst
+to trigger. The separate severe EWMA/RTT entry paths remain unchanged.
+
+## Unchanged Defaults
+
+| Parameter | Value |
+| --- | ---: |
+| rate | 45,000,000 bytes/s (360 Mbps) |
+| minimum target | 50% of rate |
+| CWND gain | 26 (2.6x) |
+| beta / noncong_beta | 871 / 1000 |
+| min / max CWND | 32 / 10000 packets |
+| adaptive / high-delay compensation / verbose | on / off / off |
+| moderate loss threshold / confirmations | 3% / 5 |
+| severe loss threshold / recovery | 30% / 25% |
+| RTT tolerance / confirmations | 80% plus jitter allowance / 20 |
+| minimum flight / avoidance hold | 250ms / 250ms |
+
+In AVOIDING, target remains clamp(smoothed ACK rate * 1.05, rate * floor%, rate).
+Higher samples receive 25% weight; lower eligible samples receive 12.5%.
+After classification recovery, avoidance exits once its minimum residence
+time has elapsed, not after 250ms of continuous health. Pacing remains 120%
+for stable, at most 110% for jittery, and at most 100% for congested paths.
+Default targets are 180-360 Mbps with 432 Mbps stable pacing, not guaranteed
+goodput. CWND, RTT, buffer and recovery thresholds are not retuned.
+
+## Idle Reuse and Cost
+
+Idle is callback-observed. A new transmission ends the idle period; repeated
+small bursts less than ten seconds apart need not fully reset history.
+An idle socket need not update its displayed pacing until another event
+arrives. Pending data, zero-window stalls and RTOs do not imply healthy idle,
+nor do they alone prove congestion. No per-socket timer, dynamic allocation,
+logging loop or IP table is added. Private state stays within 88 bytes.
+Rate-status remains a pacing inference, not internal-mode telemetry or a
+count of saturated downloads.
+
+## Verification
+
+python3 tests/run_model_tests.py compiles production controller functions
+against a TCP shim, exercising HZ=100/250/1000, pending evidence, isolated and
+sustained losses, app-limited delivery, idle/backlog, counter wrap, expiry
+and confirmation settings 1-255. CI also checks scripts, metadata and kernel
+builds. These are not live network benchmarks or a guarantee that more flows
+will enter adaptation.
+
+Kernel sampling semantics:
+[Linux 6.12 tcp_rate.c](https://github.com/torvalds/linux/blob/v6.12/net/ipv4/tcp_rate.c).

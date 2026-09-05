@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.9 runtime-tunable Mux adaptive edition
+// lotspeed.c - v3.10.10 demand-aware loss adaptation
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -37,14 +37,11 @@
 #define LOTSPEED_MAX_U64 ((u64)~0ULL)
 #define LOTSPEED_LOSS_SCALE 1024
 #define LOTSPEED_ACK_EXTRA_MAX_US 100000
-#define LOTSPEED_MUX_WINDOW_MS 5000
 #define LOTSPEED_MUX_IDLE_RESET_MS 10000
-#define LOTSPEED_MUX_ACTIVE_PCT 10
-#define LOTSPEED_MUX_LOW_WINDOWS 2
 #define LOTSPEED_LOSS_MIN_DELIVERED 1
 #define LOTSPEED_CONGEST_MIN_DELIVERED 8
 #define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
-#define LOTSPEED_EFFICIENCY_ADAPT_PCT 70
+#define LOTSPEED_LOSS_MAX_SAMPLE_MS 2000
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -410,7 +407,7 @@ MODULE_PARM_DESC(lotserver_loss_adapt_pct,
 module_param_cb(lotserver_loss_adapt_samples, &param_ops_confirm_rounds,
                 &lotserver_loss_adapt_samples, 0644);
 MODULE_PARM_DESC(lotserver_loss_adapt_samples,
-                 "Qualified moderate-loss rounds required before adaptive mode");
+                 "Fresh moderate-loss samples required before adaptive mode");
 
 module_param_cb(lotserver_rtt_confirm_samples, &param_ops_confirm_rounds, &lotserver_rtt_confirm_samples, 0644);
 MODULE_PARM_DESC(lotserver_rtt_confirm_samples, "Packet-timed RTT rounds required for congestion");
@@ -456,7 +453,6 @@ struct lotspeed {
     // congestion-control private-state limit.
     u64 target_rate;
     u64 actual_rate;
-    u64 mux_tx_base;
 
     u32 last_state_ts;
     u32 probe_rtt_ts;
@@ -467,17 +463,19 @@ struct lotspeed {
     u32 loss_ewma;
     u32 min_rtt_stamp;
     u32 probe_prior_cwnd;
-    u32 mux_activity_stamp;
+    u32 mux_idle_stamp;
     u32 next_rtt_delivered;
-    u32 round_lost;
     u32 round_stamp;
+    u32 loss_delivered;
+    u32 loss_lost;
+    u32 loss_stamp;
     u16 extra_acked;
     u8 state;
-    u8 mux_low_windows;
     u8 loss_adapt_count;
     u8 rtt_high_count;
     u8 path_mode;
     bool ss_mode;
+    bool mux_drained;
 };
 
 // 将状态转换为字符串，用于日志
@@ -530,17 +528,15 @@ static void lotspeed_init(struct sock *sk)
     ca->last_state_ts = tcp_jiffies32;
     ca->probe_rtt_ts = tcp_jiffies32;
     ca->min_rtt_stamp = tcp_jiffies32;
-    ca->mux_activity_stamp = tcp_jiffies32;
+    ca->mux_idle_stamp = tcp_jiffies32;
+    ca->mux_drained = true;
     ca->round_stamp = tcp_jiffies32;
     ca->next_rtt_delivered = tp->delivered;
-    ca->round_lost = tp->lost;
+    ca->loss_delivered = tp->delivered;
+    ca->loss_lost = tp->lost;
+    ca->loss_stamp = tcp_jiffies32;
     ca->path_mode = PATH_STABLE;
     ca->target_rate = lotserver_rate;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
-    ca->mux_tx_base = tp->bytes_sent;
-#else
-    ca->mux_tx_base = tp->data_segs_out;
-#endif
 
     // v2.1特性
     ca->ss_mode = true;
@@ -666,8 +662,7 @@ static void lotspeed_update_path_mode(struct sock *sk,
                                       u32 delivered,
                                       u32 losses,
                                       bool loss_qualified,
-                                      bool rtt_qualified,
-                                      bool efficiency_qualified)
+                                      bool rtt_qualified)
 {
     struct lotspeed *ca = inet_csk_ca(sk);
     u64 total_packets;
@@ -719,9 +714,9 @@ static void lotspeed_update_path_mode(struct sock *sk,
     loss_adapt_recover = max_t(u32, loss_adapt * 3 / 4, 1);
     jitter_threshold = max_t(u32, ca->rtt_min / 4, 8000);
 
-    /* EWMA smooths burst loss; hysteresis keeps borderline rounds neutral. */
+    /* Old EWMA alone must not turn one burst into repeated loss evidence. */
     if (loss_qualified) {
-        if (ca->loss_ewma >= loss_adapt || efficiency_qualified) {
+        if (losses && ca->loss_ewma >= loss_adapt) {
             if (ca->loss_adapt_count < lotserver_loss_adapt_samples)
                 ca->loss_adapt_count++;
         } else if (ca->loss_ewma <= loss_adapt_recover) {
@@ -774,24 +769,33 @@ static u64 lotspeed_adaptive_floor(void)
                  125000);
 }
 
-static u64 lotspeed_tcp_tx_counter(const struct tcp_sock *tp)
+static bool lotspeed_sample_loss(struct sock *sk, u32 now,
+                                 u32 *delivered, u32 *losses)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
-    return tp->bytes_sent;
-#else
-    return tp->data_segs_out;
-#endif
-}
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct lotspeed *ca = inet_csk_ca(sk);
+    u32 elapsed = now - ca->loss_stamp;
 
-static u64 lotspeed_tcp_counter_delta(u64 current_counter, u64 previous,
-                                      u32 mss)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
-    (void)mss;
-    return current_counter - previous;
-#else
-    return (u64)(u32)((u32)current_counter - (u32)previous) * mss;
-#endif
+    if (elapsed > msecs_to_jiffies(LOTSPEED_LOSS_MAX_SAMPLE_MS)) {
+        /* Stale/unobserved intervals are neither healthy nor fresh losses. */
+        ca->loss_ewma = 0;
+        ca->loss_adapt_count = 0;
+        ca->loss_delivered = tp->delivered;
+        ca->loss_lost = tp->lost;
+        ca->loss_stamp = now;
+        return false;
+    }
+
+    *delivered = tp->delivered - ca->loss_delivered;
+    *losses = tp->lost - ca->loss_lost;
+    if (!elapsed || *delivered < LOTSPEED_LOSS_MIN_DELIVERED)
+        return false;
+
+    /* Consume both counters together, only after the sample qualifies. */
+    ca->loss_delivered = tp->delivered;
+    ca->loss_lost = tp->lost;
+    ca->loss_stamp = now;
+    return true;
 }
 
 static void lotspeed_reset_mux_history(struct sock *sk, u32 now)
@@ -806,62 +810,39 @@ static void lotspeed_reset_mux_history(struct sock *sk, u32 now)
     ca->rtt_high_count = 0;
     ca->path_mode = PATH_STABLE;
     ca->extra_acked = 0;
-    ca->mux_low_windows = 0;
-    ca->mux_tx_base = lotspeed_tcp_tx_counter(tp);
-    ca->mux_activity_stamp = now;
+    ca->mux_idle_stamp = now;
     ca->next_rtt_delivered = tp->delivered;
-    ca->round_lost = tp->lost;
     ca->round_stamp = now;
+    ca->loss_delivered = tp->delivered;
+    ca->loss_lost = tp->lost;
+    ca->loss_stamp = now;
 
     if (ca->state == AVOIDING)
         enter_state(sk, CRUISING);
 }
 
-static void lotspeed_update_mux_activity(struct sock *sk, u32 mss, u32 now)
+static void lotspeed_update_mux_activity(struct sock *sk, u32 now)
 {
     struct tcp_sock *tp = tcp_sk(sk);
     struct lotspeed *ca = inet_csk_ca(sk);
-    u32 elapsed_ms;
-    u64 tx_now;
-    u64 tx_bytes;
-    u64 low_rate;
-    u64 low_bytes;
 
-    if (!lotserver_adaptive) {
+    if (!lotserver_adaptive)
         ca->target_rate = lotserver_rate;
-        ca->mux_low_windows = 0;
-        ca->mux_tx_base = lotspeed_tcp_tx_counter(tp);
-        ca->mux_activity_stamp = now;
+
+    /* Include unsent AND unacknowledged data, even during zero-window/RTO. */
+    if (tp->write_seq != tp->snd_una || tp->packets_out) {
+        ca->mux_drained = false;
+        ca->mux_idle_stamp = now;
         return;
     }
 
-    elapsed_ms = jiffies_to_msecs(now - ca->mux_activity_stamp);
-    if (elapsed_ms < LOTSPEED_MUX_WINDOW_MS)
-        return;
-
-    tx_now = lotspeed_tcp_tx_counter(tp);
-    tx_bytes = lotspeed_tcp_counter_delta(tx_now, ca->mux_tx_base,
-                                           mss);
-    low_rate = lotspeed_scale_percent(lotserver_rate,
-                                      LOTSPEED_MUX_ACTIVE_PCT);
-    low_bytes = div64_u64(low_rate * elapsed_ms, 1000);
-
-    if (tx_bytes < low_bytes) {
-        if (ca->mux_low_windows < LOTSPEED_MUX_LOW_WINDOWS)
-            ca->mux_low_windows++;
-    } else {
-        ca->mux_low_windows = 0;
+    if (!ca->mux_drained) {
+        ca->mux_drained = true;
+        ca->mux_idle_stamp = now;
     }
-
-    ca->mux_tx_base = tx_now;
-    ca->mux_activity_stamp = now;
-
-    if (ca->mux_low_windows >= LOTSPEED_MUX_LOW_WINDOWS) {
-        if (lotserver_verbose)
-            pr_info("lotspeed: [uk0@%s] low Mux traffic reset adaptive history\n",
-                    CURRENT_TIMESTAMP);
+    if (time_after32(now, ca->mux_idle_stamp +
+                     msecs_to_jiffies(LOTSPEED_MUX_IDLE_RESET_MS)))
         lotspeed_reset_mux_history(sk, now);
-    }
 }
 
 /* Update delivery, loss, and ACK aggregation once per packet-timed RTT. */
@@ -874,11 +855,10 @@ static bool lotspeed_update_round_model(struct sock *sk,
     struct lotspeed *ca = inet_csk_ca(sk);
     u32 now = tcp_jiffies32;
     u32 delivered;
-    u32 losses;
+    u32 losses = 0;
     u32 path_delivered;
     bool loss_qualified_round;
     bool rtt_qualified_round;
-    bool efficiency_qualified_round;
     u32 elapsed_jiffies;
     u64 elapsed_us;
     u64 delivered_bytes;
@@ -889,12 +869,10 @@ static bool lotspeed_update_round_model(struct sock *sk,
         return false;
 
     delivered = tp->delivered - ca->next_rtt_delivered;
-    losses = tp->lost - ca->round_lost;
     elapsed_jiffies = now - ca->round_stamp;
     elapsed_us = jiffies_to_usecs(elapsed_jiffies);
 
     ca->next_rtt_delivered = tp->delivered;
-    ca->round_lost = tp->lost;
     ca->round_stamp = now;
 
     if (delivered && elapsed_us) {
@@ -928,38 +906,20 @@ static bool lotspeed_update_round_model(struct sock *sk,
         ca->extra_acked = ca->extra_acked * 7 / 8;
     }
 
-    path_delivered = delivered;
-    loss_qualified_round =
-        path_delivered >= LOTSPEED_LOSS_MIN_DELIVERED &&
-        elapsed_us > 0 &&
-        elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+    path_delivered = 0;
+    loss_qualified_round = lotspeed_sample_loss(sk, now,
+                                               &path_delivered, &losses);
     rtt_qualified_round =
-        path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
+        delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
         elapsed_us > 0 &&
         elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
-    /*
-     * A delivery-rate collapse can be hidden by a low packet-loss EWMA.
-     * Require real demand, a retransmission, and a post-startup sample so
-     * short or application-limited Mux traffic is not downgraded.
-     */
-    efficiency_qualified_round =
-        rtt_qualified_round &&
-        ca->state != STARTUP &&
-        ca->mux_low_windows == 0 &&
-        rs && !rs->is_app_limited &&
-        losses > 0 &&
-        round_rate >= lotspeed_scale_percent(lotserver_rate,
-                                              LOTSPEED_MUX_ACTIVE_PCT) &&
-        round_rate < lotspeed_scale_percent(lotserver_rate,
-                                             LOTSPEED_EFFICIENCY_ADAPT_PCT);
     lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
                               loss_qualified_round,
-                              rtt_qualified_round,
-                              efficiency_qualified_round);
+                              rtt_qualified_round);
     return true;
 }
 
-// --- v3.10.9 core: runtime-tunable Mux adaptation ---
+// --- v3.10.10 core: demand-aware loss adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -996,7 +956,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
     path_rtt = rtt_us;
 
     lotspeed_update_round_model(sk, rs, mss, path_rtt);
-    lotspeed_update_mux_activity(sk, mss, now);
+    lotspeed_update_mux_activity(sk, now);
     adaptive_floor = lotspeed_adaptive_floor();
     high_delay_path = lotserver_hd_enable &&
                       ca->path_mode == PATH_STABLE &&
@@ -1308,28 +1268,18 @@ static void lotspeed_cwnd_event(struct sock *sk, enum tcp_ca_event event)
 
     switch (event) {
         case CA_EVENT_TX_START:
-            if (time_after32(now, ca->round_stamp +
-                             msecs_to_jiffies(
-                                  LOTSPEED_MUX_IDLE_RESET_MS))) {
-                lotspeed_reset_mux_history(sk, now);
-            }
-            ca->ss_mode = true;
-            ca->round_stamp = now;
-            ca->next_rtt_delivered = tp->delivered;
-            ca->round_lost = tp->lost;
-            ca->extra_acked = 0;
-            break;
-
         case CA_EVENT_CWND_RESTART:
-            ca->ss_mode = true;
-            if (time_after32(now, ca->round_stamp +
-                             msecs_to_jiffies(
-                                  LOTSPEED_MUX_IDLE_RESET_MS))) {
+            /* TX_START can also mean zero estimated flight during recovery. */
+            if (ca->mux_drained && !tp->packets_out &&
+                time_after32(now, ca->mux_idle_stamp +
+                             msecs_to_jiffies(LOTSPEED_MUX_IDLE_RESET_MS))) {
                 lotspeed_reset_mux_history(sk, now);
             }
+            ca->mux_drained = false;
+            ca->mux_idle_stamp = now;
+            ca->ss_mode = true;
             ca->round_stamp = now;
             ca->next_rtt_delivered = tp->delivered;
-            ca->round_lost = tp->lost;
             ca->extra_acked = 0;
             break;
 
@@ -1374,7 +1324,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.9 - tunable Mux adaptation          ║\n");
+    pr_info("║    LotSpeed v3.10.10 - demand-aware adaptation        ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1412,9 +1362,8 @@ static int __init lotspeed_module_init(void)
             lotserver_probe_rtt_duration_ms, lotserver_probe_rtt_cwnd_pct);
     pr_info("  Adaptive Floor: %u%% of rate ceiling\n",
             lotserver_min_rate_pct);
-    pr_info("  Mux Reset: %u low windows of %ums below %u%% load\n",
-            LOTSPEED_MUX_LOW_WINDOWS, LOTSPEED_MUX_WINDOW_MS,
-            LOTSPEED_MUX_ACTIVE_PCT);
+    pr_info("  Mux Reset: drained send queue idle for %u ms\n",
+            LOTSPEED_MUX_IDLE_RESET_MS);
     pr_info("  Minimum Flight Window: %u ms\n",
             lotserver_min_flight_ms);
     pr_info("  Avoidance Hold: %u ms\n", lotserver_avoid_hold_ms);
@@ -1449,7 +1398,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.9 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.10 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1465,6 +1414,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.9-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.9 - runtime-tunable Mux adaptive control");
+MODULE_VERSION("3.10.10-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.10 - demand-aware loss adaptation");
 MODULE_ALIAS("tcp_lotspeed");
