@@ -17,7 +17,7 @@ SOURCE = (ROOT / "lotspeed.c").read_text(encoding="utf-8")
 
 def function(name):
     # Functions in this translation unit have column-zero closing braces.
-    match = re.search(r"^static [^;{]*\b" + name + r"\([^;]*?^\}",
+    match = re.search(r"^static [^;{]*\b" + name + r"\([^;{]*\)\s*\{.*?^\}",
                       SOURCE, re.M | re.S)
     if match is None:
         raise RuntimeError(f"Production function not found: {name}")
@@ -43,16 +43,23 @@ unit = "\n".join([
     *(function(name) for name in functions),
     (ROOT / "tests/model_cases.c").read_text(encoding="utf-8"),
 ])
-with tempfile.TemporaryDirectory(prefix="lotspeed-tests-") as directory:
-    source = Path(directory) / "model.c"
-    binary = Path(directory) / ("model.exe" if os.name == "nt" else "model")
-    source.write_text(unit, encoding="utf-8")
-    for hz in (100, 250, 1000):
-        subprocess.run([
-            *shlex.split(os.environ.get("CC", "cc")), "-std=gnu99",
-            "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable",
-            "-Wno-unused-parameter", f"-DHZ={hz}",
-            *shlex.split(os.environ.get("CFLAGS", "")),
-            str(source), "-o", str(binary),
-        ], check=True)
-        subprocess.run([str(binary)], check=True)
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="lotspeed-tests-") as directory:
+        source = Path(directory) / "model.c"
+        binary = Path(directory) / ("model.exe" if os.name == "nt" else "model")
+        source.write_text(unit, encoding="utf-8")
+        for hz in (100, 250, 1000):
+            subprocess.run([
+                *shlex.split(os.environ.get("CC", "cc")), "-std=gnu99",
+                "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable",
+                "-Wno-unused-parameter", f"-DHZ={hz}",
+                *shlex.split(os.environ.get("CFLAGS", "")),
+                str(source), "-o", str(binary),
+            ], check=True)
+            subprocess.run([str(binary)], check=True)
+
+
+if __name__ == "__main__":
+    main()
