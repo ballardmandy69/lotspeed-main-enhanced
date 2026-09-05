@@ -1,11 +1,11 @@
-# LotSpeed 3.10.8 Enhanced
+# LotSpeed 3.10.9 Enhanced
 
-本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 50%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.8 保留 360 Mbps、2.6x CWND gain 和原有 MUX 分类逻辑，将持续中度丢包默认值调整为 3% 与 5 个合格轮次，并支持运行中调整确认轮数。
+本版本以 LotSpeed 3.6.4 的 `mux-throughput` 为基础，保留拥塞门控的 ACK 到达速率自适应，将动态下限设为上限的 50%，并为长期复用的 MUX TCP 增加低流量历史重置。3.10.9 保留 360 Mbps、2.6x CWND gain 和 3%/5 轮默认值，并增加一个只针对活跃低效率丢包流的 adapt 入口。
 
 ## 安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3108.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3109.sh | bash
 lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -70,6 +70,8 @@ RTT 相对基线膨胀超过 80%，持续 20 个轮次，且丢包 EWMA >= 25%
 或
 同一 RTT 窗口的丢包 EWMA >= 3%，连续累计 5 个合格轮次
 ```
+
+另外，连接离开启动阶段后，如果当前 MUX 窗口仍有实际流量、采样不是应用限速、该轮出现重传，并且 ACK 交付速率低于上限的 70%，也会累计一轮中度 adapt 证据。它用于覆盖“实际速度明显掉下去，但丢包 EWMA 尚未达到 3%”的连接；低于 10% 的 MUX 低流量窗口会走原有历史重置，不会触发这个入口。
 
 每个 packet-timed RTT 分别保存累计 delivered 和 lost 的起止快照，EWMA 的分子、分母来自同一窗口。EWMA 在约 2.2%～3% 之间时保持中度证据，降到约 2.2% 以下时每个合格轮次扣除两个证据，因此偶发丢包不会直接触发。短暂清空发送队列不会阻止长期 MUX 的丢包或 RTT 学习。`PATH_STABLE` 使用 120% pacing，`PATH_JITTERY` 最多使用 110% pacing，确认拥塞时使用 100% pacing。单次 `TCP_CA_Loss` 或 RTO 仍执行 Linux TCP 的 CWND 退避，但不会单独触发目标速率 adapt。拥塞分类解除并经过至少 250ms 后，返回固定 360 Mbps 目标。默认主配置的动态范围是 180～360 Mbps。
 

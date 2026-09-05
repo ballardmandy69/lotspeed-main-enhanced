@@ -1,6 +1,6 @@
-# LotSpeed 3.10.8 Enhanced
+# LotSpeed 3.10.9 Enhanced
 
-LotSpeed 3.10.8 builds on the congestion-gated adaptive model from the 3.6.4
+LotSpeed 3.10.9 builds on the congestion-gated adaptive model from the 3.6.4
 `mux-throughput` profile. Its floor follows 50% of the configured ceiling, it
 restores broad Mux loss and RTT visibility, and clears stale per-connection
 learning after sustained low Mux traffic. The main profile uses a 360 Mbps
@@ -10,7 +10,7 @@ over five qualified rounds. Both values are runtime-tunable.
 ## Install
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3108.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v3109.sh | bash
 lotspeed preset mux-throughput
 lotspeed status
 ```
@@ -69,6 +69,11 @@ delivery interval.
 
 Unlike 3.10.5, a temporary empty send queue no longer blocks RTT learning, and
 the minimum packet counts are close to the broad sampling behavior of 3.6.4.
+
+After startup, an active non-app-limited round with a retransmission and an
+ACK delivery rate below 70% of the configured ceiling also adds one moderate
+adaptation round. The Mux activity gate excludes traffic below the existing
+low-traffic reset threshold.
 
 `lotserver_loss_adapt_pct` and `lotserver_loss_adapt_samples` can be changed
 while the module is running and are persisted by `lotspeed set`. Lower values

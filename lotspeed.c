@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.8 runtime-tunable Mux adaptive edition
+// lotspeed.c - v3.10.9 runtime-tunable Mux adaptive edition
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -44,6 +44,7 @@
 #define LOTSPEED_LOSS_MIN_DELIVERED 1
 #define LOTSPEED_CONGEST_MIN_DELIVERED 8
 #define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
+#define LOTSPEED_EFFICIENCY_ADAPT_PCT 70
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -665,7 +666,8 @@ static void lotspeed_update_path_mode(struct sock *sk,
                                       u32 delivered,
                                       u32 losses,
                                       bool loss_qualified,
-                                      bool rtt_qualified)
+                                      bool rtt_qualified,
+                                      bool efficiency_qualified)
 {
     struct lotspeed *ca = inet_csk_ca(sk);
     u64 total_packets;
@@ -719,7 +721,7 @@ static void lotspeed_update_path_mode(struct sock *sk,
 
     /* EWMA smooths burst loss; hysteresis keeps borderline rounds neutral. */
     if (loss_qualified) {
-        if (ca->loss_ewma >= loss_adapt) {
+        if (ca->loss_ewma >= loss_adapt || efficiency_qualified) {
             if (ca->loss_adapt_count < lotserver_loss_adapt_samples)
                 ca->loss_adapt_count++;
         } else if (ca->loss_ewma <= loss_adapt_recover) {
@@ -876,6 +878,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     u32 path_delivered;
     bool loss_qualified_round;
     bool rtt_qualified_round;
+    bool efficiency_qualified_round;
     u32 elapsed_jiffies;
     u64 elapsed_us;
     u64 delivered_bytes;
@@ -934,13 +937,29 @@ static bool lotspeed_update_round_model(struct sock *sk,
         path_delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
         elapsed_us > 0 &&
         elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+    /*
+     * A delivery-rate collapse can be hidden by a low packet-loss EWMA.
+     * Require real demand, a retransmission, and a post-startup sample so
+     * short or application-limited Mux traffic is not downgraded.
+     */
+    efficiency_qualified_round =
+        rtt_qualified_round &&
+        ca->state != STARTUP &&
+        ca->mux_low_windows == 0 &&
+        rs && !rs->is_app_limited &&
+        losses > 0 &&
+        round_rate >= lotspeed_scale_percent(lotserver_rate,
+                                              LOTSPEED_MUX_ACTIVE_PCT) &&
+        round_rate < lotspeed_scale_percent(lotserver_rate,
+                                             LOTSPEED_EFFICIENCY_ADAPT_PCT);
     lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
                               loss_qualified_round,
-                              rtt_qualified_round);
+                              rtt_qualified_round,
+                              efficiency_qualified_round);
     return true;
 }
 
-// --- v3.10.8 core: runtime-tunable Mux adaptation ---
+// --- v3.10.9 core: runtime-tunable Mux adaptation ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1355,7 +1374,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.8 - tunable Mux adaptation          ║\n");
+    pr_info("║    LotSpeed v3.10.9 - tunable Mux adaptation          ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1430,7 +1449,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.8 Unloaded                       ║\n");
+    pr_info("║        LotSpeed v3.10.9 Unloaded                       ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1446,6 +1465,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.8-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.8 - runtime-tunable Mux adaptive control");
+MODULE_VERSION("3.10.9-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.9 - runtime-tunable Mux adaptive control");
 MODULE_ALIAS("tcp_lotspeed");
