@@ -1,15 +1,16 @@
-# LotSpeed 3.10.10 Enhanced
+# LotSpeed 3.10.11 Enhanced
 
-This release fixes loss-evidence lifecycle and idle reuse handling on top of
-3.10.9. Control remains per underlying TCP, not per IP, AnyTLS substream, or a
-presumed one-TCP-per-user relationship.
+This release changes moderate adaptive entry on top of 3.10.10: fresh,
+qualified loss samples count directly instead of waiting for the loss EWMA
+to cross the moderate threshold. Control remains per underlying TCP, not per
+IP, AnyTLS substream, or a presumed one-TCP-per-user relationship.
 
 ## Install
 
 Run as root:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31010.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31011.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
@@ -29,10 +30,11 @@ module profile and buffer sysctls documented in README.md.
 - Windows expire after two seconds without a qualifying sample. Expired loss
   EWMA and counts are cleared; an invalid window is not a synthetic healthy
   sample and does not itself clear the path classification.
-- Moderate confirmation requires threshold-crossing EWMA and newly marked
-  loss. One burst cannot keep increasing the count through old EWMA alone.
-- The supplemental entry based on ACK speed below 70% of target is removed.
-  No delivered/sent byte ratio replaces it.
+- Moderate confirmation now requires at least eight delivered packets,
+  newly marked loss, and a current sample at or above loss_adapt_pct. It no
+  longer waits for EWMA warm-up. Old EWMA alone cannot add confirmations.
+- No supplemental entry based on ACK speed or a delivered/sent byte ratio
+  is added. The separate severe EWMA/RTT entry and recovery stay unchanged.
 - Pending unsent or unacknowledged data prevents idle reset, regardless of
   speed. A drained queue must be observed idle for about ten seconds before
   the next callback/restart clears history. Short TX_START events preserve
@@ -45,12 +47,15 @@ at most two seconds; RTT still needs eight packets over a nonzero interval
 of at most two seconds. Both accept app-limited traffic. The bandwidth
 estimator still rejects lower app-limited samples once it has an estimate.
 
-The moderate default remains 3% with five fresh-loss confirmations. At about
-2.2% or less, each qualified window removes two confirmations. Between
-thresholds, or above threshold without fresh loss, evidence is held until
-decay/expiry. Counts are accumulated, not strictly consecutive, and are not
-seconds. A samples setting of one intentionally permits one qualifying burst
-to trigger. The separate severe EWMA/RTT entry paths remain unchanged.
+The moderate default remains 3% with five fresh-loss confirmations. The
+current sample and threshold use integer 1/1024 units. When a sample cannot
+add a confirmation and EWMA is about 2.2% or less, two confirmations are
+removed. Otherwise evidence is held until decay/expiry. Counts are
+accumulated, not strictly consecutive, and are not seconds. A samples setting
+of one intentionally permits one qualifying burst to trigger and is preserved
+on upgrade. Use lotspeed set lotserver_loss_adapt_samples 2 to require two
+confirmations instead. The eight-packet safeguard only applies to moderate
+entry; it does not disable the existing severe EWMA entry for small samples.
 
 ## Unchanged Defaults
 

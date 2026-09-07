@@ -12,12 +12,12 @@ jobs:
       - name: Check scripts and release metadata
         run: |
           for script in install*.sh lotspeedctl; do bash -n "$script"; done
-          grep -q 'MODULE_VERSION("3.10.10-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.10.10-enhanced"' install.sh
-          grep -q 'VERSION="3.10.10-enhanced"' lotspeedctl
-          grep -q 'RELEASE_REF="v3.10.10"' install-v31010.sh
-          grep -q 'PACKAGE_VERSION="3.10.10-enhanced"' dkms.conf
-          grep -q 'VERSION.*3.10.10-enhanced' Makefile
+          grep -q 'MODULE_VERSION("3.10.11-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.10.11-enhanced"' install.sh
+          grep -q 'VERSION="3.10.11-enhanced"' lotspeedctl
+          grep -q 'RELEASE_REF="v3.10.11"' install-v31011.sh
+          grep -q 'PACKAGE_VERSION="3.10.11-enhanced"' dkms.conf
+          grep -q 'VERSION.*3.10.11-enhanced' Makefile
           grep -q 'static unsigned long lotserver_rate = 45000000ULL' lotspeed.c
           grep -q 'static unsigned int lotserver_gain = 26' lotspeed.c
           grep -q 'static unsigned int lotserver_min_rate_pct = 50' lotspeed.c
@@ -31,6 +31,8 @@ jobs:
           grep -q 'write_param lotserver_pacing_gain 120' lotspeedctl
           grep -q 'lotspeed_scale_percent(ca->actual_rate, 105)' lotspeed.c
           ! grep -q 'EFFICIENCY_ADAPT\|efficiency_qualified\|GUARD_LIMIT_' lotspeed.c
+          grep -q 'sample_loss >= loss_adapt' lotspeed.c
+          grep -q 'delivered >= LOTSPEED_CONGEST_MIN_DELIVERED' lotspeed.c
           grep -q 'ACTIVE_FULL_120' lotspeedctl
           grep -q 'ACTIVE_JITTERY_110' lotspeedctl
           grep -q 'ACTIVE_ADAPTIVE_100' lotspeedctl
@@ -56,5 +58,5 @@ jobs:
           for header_dir in "${headers[@]}"; do
             make clean KERNEL_DIR="${header_dir}" || true
             make KERNEL_DIR="${header_dir}"
-            test "$(modinfo -F version lotspeed.ko)" = '3.10.10-enhanced'
+            test "$(modinfo -F version lotspeed.ko)" = '3.10.11-enhanced'
           done

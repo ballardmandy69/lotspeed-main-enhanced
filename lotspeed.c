@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.10 demand-aware loss adaptation
+// lotspeed.c - v3.10.11 fresh-loss adaptive entry
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -402,7 +402,7 @@ MODULE_PARM_DESC(lotserver_loss_recover_pct, "Loss EWMA percent required to rema
 
 module_param_cb(lotserver_loss_adapt_pct, &param_ops_loss_adapt, &lotserver_loss_adapt_pct, 0644);
 MODULE_PARM_DESC(lotserver_loss_adapt_pct,
-                 "Moderate loss EWMA percent sustained before adaptive mode");
+                 "Fresh loss sample percent required for moderate adaptive confirmation");
 
 module_param_cb(lotserver_loss_adapt_samples, &param_ops_confirm_rounds,
                 &lotserver_loss_adapt_samples, 0644);
@@ -714,9 +714,14 @@ static void lotspeed_update_path_mode(struct sock *sk,
     loss_adapt_recover = max_t(u32, loss_adapt * 3 / 4, 1);
     jitter_threshold = max_t(u32, ca->rtt_min / 4, 8000);
 
-    /* Old EWMA alone must not turn one burst into repeated loss evidence. */
+    /*
+     * Use the current fresh-loss sample for moderate entry. The EWMA remains
+     * the severe/recovery signal, but it must not delay entry for many rounds
+     * when every qualified window is already above the moderate threshold.
+     */
     if (loss_qualified) {
-        if (losses && ca->loss_ewma >= loss_adapt) {
+        if (delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
+            losses && sample_loss >= loss_adapt) {
             if (ca->loss_adapt_count < lotserver_loss_adapt_samples)
                 ca->loss_adapt_count++;
         } else if (ca->loss_ewma <= loss_adapt_recover) {
@@ -919,7 +924,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10.10 core: demand-aware loss adaptation ---
+// --- v3.10.11 core: fresh-loss adaptive entry ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -962,7 +967,7 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
                       ca->path_mode == PATH_STABLE &&
                       ca->rtt_min >= lotserver_hd_thresh_us;
 
-    /* Only the qualified EWMA/RTT classifier may lower the target rate. */
+    /* Only the qualified loss/RTT classifier may lower the target rate. */
     if (!lotserver_turbo && lotserver_adaptive &&
         ca->path_mode == PATH_CONGESTED)
         congestion_detected = true;
@@ -1324,7 +1329,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.10 - demand-aware adaptation        ║\n");
+    pr_info("║    LotSpeed v3.10.11 - fresh-loss adaptive entry      ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1398,7 +1403,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.10 Unloaded                      ║\n");
+    pr_info("║        LotSpeed v3.10.11 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1414,6 +1419,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.10-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.10 - demand-aware loss adaptation");
+MODULE_VERSION("3.10.11-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.11 - fresh-loss adaptive entry");
 MODULE_ALIAS("tcp_lotspeed");

@@ -82,6 +82,77 @@ static void test_single_burst_and_persistent_loss(void)
     assert(sk.ca.loss_adapt_count == 0);
 }
 
+static void test_fresh_loss_entry(void)
+{
+    struct sock sk;
+    init_test(&sk);
+    lotserver_loss_adapt_samples = 2;
+    /* 3 / (100 + 3) is below the moderate threshold, even after warm-up. */
+    for (int i = 0; i < 50; ++i) {
+        advance_ms(100);
+        round_sample(&sk, 100, 3, false);
+        assert(sk.ca.loss_adapt_count == 0);
+        assert(sk.ca.path_mode == PATH_STABLE);
+    }
+    for (int app = 0; app < 2; ++app) {
+        init_test(&sk);
+        lotserver_loss_adapt_samples = 2;
+        for (int i = 0; i < 2; ++i) {
+            advance_ms(100);
+            round_sample(&sk, 97, 3, app);
+            assert(sk.ca.loss_adapt_count == i + 1);
+            assert(sk.ca.loss_ewma <
+                   lotserver_loss_adapt_pct * LOTSPEED_LOSS_SCALE / 100);
+            assert((sk.ca.path_mode == PATH_CONGESTED) == (i == 1));
+        }
+        /* Keep the existing fast recovery after fresh moderate entry. */
+        advance_ms(100);
+        round_sample(&sk, 100, 0, app);
+        assert(sk.ca.loss_adapt_count == 0);
+        assert(sk.ca.path_mode == PATH_STABLE);
+    }
+
+    init_test(&sk);
+    lotserver_loss_adapt_samples = 2;
+    for (int i = 0; i < 2; ++i) {
+        advance_ms(100);
+        round_sample(&sk, 7, 1, false);
+        assert(sk.ca.loss_adapt_count == 0);
+        assert(sk.ca.path_mode == PATH_STABLE);
+    }
+    advance_ms(100);
+    round_sample(&sk, 8, 1, false);
+    assert(sk.ca.loss_adapt_count == 1);
+
+    init_test(&sk);
+    lotserver_loss_adapt_samples = 2;
+    advance_ms(100);
+    round_sample(&sk, 97, 3, false);
+    struct rate_sample duplicate = { .prior_delivered = 0 };
+    for (int i = 0; i < 10; ++i) {
+        advance_ms(10);
+        assert(!lotspeed_update_round_model(&sk, &duplicate, 1440, 50000));
+        assert(sk.ca.loss_adapt_count == 1);
+    }
+    advance_ms(100);
+    round_sample(&sk, 100, 0, false);
+    advance_ms(100);
+    round_sample(&sk, 97, 3, false);
+    assert(sk.ca.loss_adapt_count == 1);
+    assert(sk.ca.path_mode == PATH_STABLE);
+
+    /* The runtime threshold still controls entry; this is not a flow quota. */
+    init_test(&sk);
+    lotserver_loss_adapt_pct = 4;
+    lotserver_loss_adapt_samples = 1;
+    advance_ms(100);
+    round_sample(&sk, 97, 3, false);
+    assert(sk.ca.path_mode == PATH_STABLE);
+    advance_ms(100);
+    round_sample(&sk, 96, 4, false);
+    assert(sk.ca.path_mode == PATH_CONGESTED);
+}
+
 static void test_idle_vs_backlog(void)
 {
     struct sock sk;
@@ -181,6 +252,7 @@ int main(void)
     assert(sizeof(struct lotspeed) <= 88); // oldest advertised private area
     test_retained_samples();
     test_single_burst_and_persistent_loss();
+    test_fresh_loss_entry();
     test_idle_vs_backlog();
     test_expiry_wrap_and_confirmation_settings();
     printf("PASS: controller regression cases, HZ=%d, state=%zu bytes\n",

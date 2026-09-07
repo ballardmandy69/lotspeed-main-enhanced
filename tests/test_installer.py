@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = (ROOT / "install.sh").read_text(encoding="utf-8")
+VERSION = re.search(r'^VERSION="([^"]+)"', SOURCE, re.M).group(1)
 BODY = re.search(r"^install_module\(\) \{.*?^\}", SOURCE, re.M | re.S).group(0)
 REQUIRED = re.search(r"local required_parameters=\((.*?)\)", BODY, re.S).group(1).split()
 
@@ -26,10 +27,10 @@ class InstallerTests(unittest.TestCase):
                          root / "lib/modules/test/kernel/net/ipv4"):
                 path.mkdir(parents=True, exist_ok=True)
             values = dict.fromkeys(REQUIRED, "1")
-            values.update(lotserver_rate="40000000", lotserver_gain="26",
-                          lotserver_min_rate_pct="50",
+            values.update(lotserver_rate="62000000", lotserver_gain="26",
+                          lotserver_min_rate_pct="20",
                           lotserver_loss_adapt_pct="3",
-                          lotserver_loss_adapt_samples="2",
+                          lotserver_loss_adapt_samples="1",
                           lotserver_adaptive="Y", lotserver_verbose="N")
             for name, value in values.items():
                 (params / name).write_text(value)
@@ -59,9 +60,12 @@ sysctl() {
 }
 rmmod() { [[ "$TEST_BUSY" == 0 ]]; }
 depmod() { :; }
-modprobe() { printf '%s\n' "$@" > "$TEST_ROOT/modprobe.log"; }
+modprobe() {
+    printf '%s\n' "$@" > "$TEST_ROOT/modprobe.log"
+    printf '%s\n' "$TEST_VERSION" > "$TEST_ROOT/sys/module/lotspeed/version"
+}
 MODULE_NAME=lotspeed
-VERSION=3.10.10-enhanced
+VERSION="$TEST_VERSION"
 INSTALL_DIR="$TEST_ROOT/build"
 MODULE_DEST="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/extra"
 LEGACY_MODULE="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/lotspeed.ko"
@@ -69,7 +73,7 @@ LEGACY_MODULE="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/lotspeed.ko"
             script = root / "exercise.sh"
             script.write_text(prelude + "\n" + body + "\ninstall_module\n",
                               encoding="utf-8", newline="\n")
-            env = dict(os.environ, TEST_ROOT=root.as_posix(),
+            env = dict(os.environ, TEST_ROOT=root.as_posix(), TEST_VERSION=VERSION,
                        TEST_LOADED=str(int(loaded)), TEST_BUSY=str(int(busy)))
             result = subprocess.run([os.environ.get("TEST_BASH", "bash"),
                                      script.as_posix()], env=env,
@@ -93,7 +97,7 @@ LEGACY_MODULE="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/lotspeed.ko"
                                      {f"{k}={v}" for k, v in values.items()})
                     self.assertNotIn("removed", config.read_text())
                     self.assertNotIn("unexpected", config.read_text())
-                    self.assertIn("lotserver_rate=40000000", config.read_text())
+                    self.assertIn("lotserver_rate=62000000", config.read_text())
                 else:
                     self.assertEqual(args, ["lotspeed"])
                     self.assertFalse(config.exists())
