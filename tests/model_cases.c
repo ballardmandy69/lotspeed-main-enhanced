@@ -247,6 +247,161 @@ static void test_expiry_wrap_and_confirmation_settings(void)
     }
 }
 
+static void init_app_loss_test(struct sock *sk)
+{
+    init_test(sk);
+    sk->ca.actual_rate = lotserver_rate;
+    sk->ca.state = AVOIDING;
+    sk->ca.path_mode = PATH_CONGESTED;
+    sk->ca.loss_ewma = LOTSPEED_LOSS_SCALE / 2;
+    sk->tcp.write_seq = 1024 * 1024;
+}
+
+static void app_loss_round(struct sock *sk, u32 ms, u32 delivered,
+                            u32 lost, u32 retrans)
+{
+    advance_ms(ms);
+    sk->tcp.total_retrans += retrans;
+    round_sample(sk, delivered, lost, true);
+}
+
+static void test_app_limited_ordinary_and_moderate(void)
+{
+    struct sock sk;
+    init_test(&sk);
+    sk.ca.actual_rate = lotserver_rate;
+    for (int i = 0; i < 150; ++i) {
+        app_loss_round(&sk, 100, 50, 0, 0);
+        assert(sk.ca.actual_rate == lotserver_rate);
+        assert(sk.ca.app_loss_ms == 0);
+    }
+    // Higher app-limited samples and lower non-app-limited samples still work.
+    app_loss_round(&sk, 100, 5000, 0, 0);
+    assert(sk.ca.actual_rate > lotserver_rate);
+    u64 prior = sk.ca.actual_rate;
+    advance_ms(100);
+    round_sample(&sk, 50, 0, false);
+    assert(sk.ca.actual_rate < prior);
+
+    init_app_loss_test(&sk);
+    sk.ca.loss_ewma = 0;
+    lotserver_loss_adapt_pct = 1;
+    lotserver_loss_adapt_samples = 1;
+    for (int i = 0; i < 150; ++i) {
+        app_loss_round(&sk, 100, 99, 1, 1);
+        assert(sk.ca.actual_rate == lotserver_rate);
+        assert(sk.ca.app_loss_ms == 0);
+    }
+    assert(sk.ca.path_mode == PATH_CONGESTED);
+}
+
+static void test_app_limited_severe_learning_and_recovery(void)
+{
+    struct sock sk;
+    init_app_loss_test(&sk);
+    for (int i = 0; i < 100; ++i) {
+        app_loss_round(&sk, 100, 50, 50, 50);
+        assert(sk.ca.actual_rate == lotserver_rate);
+    }
+    sk.ca.extra_acked = 80;
+    app_loss_round(&sk, 100, 50, 50, 50);
+    assert(sk.ca.app_loss_ms == LOTSPEED_APP_LOSS_HOLD_MS + 1);
+    assert(sk.ca.actual_rate == (lotserver_rate * 7ULL + 720000) / 8);
+    assert(sk.ca.extra_acked == 70); // no bypass of ACK-aggregation protection
+    for (int i = 0; i < 40; ++i)
+        app_loss_round(&sk, 100, 50, 50, 50);
+    assert(sk.ca.actual_rate < lotserver_rate / 10);
+
+    u64 prior = sk.ca.actual_rate;
+    app_loss_round(&sk, 100, 50, 0, 0);
+    assert(sk.ca.app_loss_ms == 0);
+    assert(sk.ca.actual_rate == prior);
+    // A new severe burst must qualify again, despite the historical EWMA.
+    app_loss_round(&sk, 100, 50, 50, 50);
+    assert(sk.ca.actual_rate == prior);
+    app_loss_round(&sk, 100, 5000, 0, 0);
+    assert(sk.ca.actual_rate > prior);
+    assert(sk.ca.app_loss_ms == 0);
+
+    sk.ca.app_loss_ms = LOTSPEED_APP_LOSS_HOLD_MS + 1;
+    lotspeed_reset_mux_history(&sk, tcp_jiffies32);
+    assert(sk.ca.app_loss_ms == 0 && sk.ca.actual_rate == 0);
+    assert(sk.ca.app_loss_retrans == (u16)sk.tcp.total_retrans);
+
+    // Production starts without a prewarmed EWMA; severe traffic must still qualify.
+    init_app_loss_test(&sk);
+    sk.ca.loss_ewma = 0;
+    for (int i = 0; i < 160; ++i)
+        app_loss_round(&sk, 100, 50, 50, 50);
+    assert(sk.ca.actual_rate < lotserver_rate / 10);
+}
+
+static void test_app_limited_rejects_weak_or_stale_evidence(void)
+{
+    struct sock sk;
+    for (int scenario = 0; scenario < 12; ++scenario) {
+        init_app_loss_test(&sk);
+        sk.ca.app_loss_ms = LOTSPEED_APP_LOSS_HOLD_MS + 1;
+        u32 ms = 100, delivered = 50, lost = 50, retrans = 50;
+        switch (scenario) {
+        case 0: lotserver_adaptive = false; break;
+        case 1: lotserver_turbo = true; break;
+        case 2: sk.tcp.snd_nxt = sk.tcp.write_seq; sk.tcp.packets_out = 100; break;
+        case 3: sk.tcp.snd_nxt = sk.tcp.write_seq - 1439; break;
+        case 4: retrans = 0; break;
+        case 5: lost = 0; break;
+        case 6: delivered = 7; lost = 7; break;
+        case 7: ms = 2100; break;
+        case 8: delivered = 0; break;
+        case 9: ms = 0; break;
+        case 10: lotserver_loss_congest_pct = 60; break;
+        case 11:
+            lotserver_loss_congest_pct = 1;
+            lotserver_loss_recover_pct = 0;
+            sk.ca.loss_ewma = LOTSPEED_LOSS_SCALE / 10;
+            delivered = 90;
+            lost = 10;
+            break;
+        }
+        app_loss_round(&sk, ms, delivered, lost, retrans);
+        assert(sk.ca.app_loss_ms == 0);
+        assert(sk.ca.actual_rate == lotserver_rate);
+    }
+
+    // Backlog disappearing between packet-timed rounds must invalidate the hold.
+    init_app_loss_test(&sk);
+    sk.ca.app_loss_ms = LOTSPEED_APP_LOSS_HOLD_MS + 1;
+    sk.tcp.snd_nxt = sk.tcp.write_seq;
+    assert(!lotspeed_update_round_model(&sk, NULL, 1440, 50000));
+    assert(sk.ca.app_loss_ms == 0);
+}
+
+static void test_app_limited_counter_wrap(void)
+{
+    struct sock sk;
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        init_app_loss_test(&sk);
+        sk.ca.app_loss_ms = LOTSPEED_APP_LOSS_HOLD_MS + 1;
+        sk.tcp.total_retrans = scenario ? UINT32_MAX - 10 : 65530;
+        sk.ca.app_loss_retrans = (u16)sk.tcp.total_retrans;
+        if (scenario == 2) {
+            tcp_jiffies32 = UINT32_MAX - msecs_to_jiffies(50);
+            sk.ca.round_stamp = tcp_jiffies32;
+            sk.ca.loss_stamp = tcp_jiffies32;
+            sk.tcp.snd_nxt = UINT32_MAX - 2000;
+            sk.tcp.write_seq = 1000;
+        }
+        app_loss_round(&sk, 100, 50, 50, scenario == 3 ? 65536 : 50);
+        if (scenario == 3) {
+            // A low-bit collision must fail closed, never invent fresh evidence.
+            assert(sk.ca.actual_rate == lotserver_rate && sk.ca.app_loss_ms == 0);
+        } else {
+            assert(sk.ca.actual_rate < lotserver_rate);
+            assert(sk.ca.app_loss_ms == LOTSPEED_APP_LOSS_HOLD_MS + 1);
+        }
+    }
+}
+
 int main(void)
 {
     assert(sizeof(struct lotspeed) <= 88); // oldest advertised private area
@@ -255,6 +410,10 @@ int main(void)
     test_fresh_loss_entry();
     test_idle_vs_backlog();
     test_expiry_wrap_and_confirmation_settings();
+    test_app_limited_ordinary_and_moderate();
+    test_app_limited_severe_learning_and_recovery();
+    test_app_limited_rejects_weak_or_stale_evidence();
+    test_app_limited_counter_wrap();
     printf("PASS: controller regression cases, HZ=%d, state=%zu bytes\n",
            HZ, sizeof(struct lotspeed));
     return 0;

@@ -28,6 +28,6 @@ struct rate_sample {
     bool is_app_limited;
 };
 struct tcp_sock {
-    u32 delivered, lost, write_seq, snd_una, packets_out;
+    u32 delivered, lost, write_seq, snd_una, snd_nxt, packets_out, total_retrans;
 };
 enum tcp_ca_event { CA_EVENT_TX_START, CA_EVENT_CWND_RESTART };

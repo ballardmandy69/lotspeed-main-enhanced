@@ -22,6 +22,9 @@ static void init_test(struct sock *sk)
     sk->ca.target_rate = lotserver_rate;
     sk->ca.mux_drained = true;
     lotserver_adaptive = true;
+    lotserver_turbo = false;
+    lotserver_loss_congest_pct = 30;
+    lotserver_loss_recover_pct = 25;
     lotserver_loss_adapt_pct = 3;
     lotserver_loss_adapt_samples = 5;
 }

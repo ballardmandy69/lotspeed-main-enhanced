@@ -1,16 +1,19 @@
-# LotSpeed 3.10.11 Enhanced
+# LotSpeed 3.10.12 Enhanced
 
-基于 3.10.10 调整中度 adapt 入口：用当前合格窗口的新增丢包指标确认，不再等待 EWMA 先达到中度门槛。不按 IP 或连接数量配额限速，不恢复 3.8 的到达率分档。每个底层 TCP 独立判断；AnyTLS 的复用不意味着一个 IP 或用户只有一条 TCP。
+基于 3.10.11，仅在持续严重丢包、持续新增重传且有待发数据时，允许较低的 app_limited 样本参与平滑估速。解决符合这些条件的异常流因旧估速偏高而降不下来的问题；普通间歇流量仍保留过滤。每个底层 TCP 独立判断，不按 IP 或连接数量配额限速。
 
 ## 安装与升级
 
-以 root 运行：
+以 root 安装或升级到固定版本 3.10.12：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31011.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.12/install-v31012.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
+
+也可从 [发布页](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.12)
+下载自解压安装器，以 root 执行 `bash lotspeed-3.10.12-enhanced-installer.run`。
 
 升级已加载的旧模块时，安装器保留新版本支持的运行中模块参数，包括自定义 rate、gain、min_rate_pct 和确认次数，并写入模块配置。不要再运行 preset，除非确实要覆盖自定义值。旧模块没有加载时，不会从旧配置文件自动迁移参数。
 
@@ -22,17 +25,20 @@ lotspeed rate-status
 lotspeed preset mux-throughput
 ```
 
-## 与 3.10.10 的区别
+## 与 3.10.11 的区别
 
-| 部分 | 3.10.10 | 3.10.11 |
+| 部分 | 3.10.11 | 3.10.12 |
 | --- | --- | --- |
-| 中度门槛 | EWMA 达标且本窗口有新增丢包 | 本窗口新增丢包指标达标即可计数，不等待 EWMA |
-| 中度样本量 | 合格丢包窗口至少 1 个 delivered 包 | 中度加计数还要求本窗口至少 8 个 delivered 包 |
-| 确认次数 | 默认 5，可运行时调整 | 不变；设为 2 时两个合格丢包窗口可触发 |
-| 严重入口和退出 | 严重 EWMA/RTT 入口、EWMA 衰减恢复 | 不变 |
-| 丢包证据与空闲复用 | 独立计数、2 秒过期、排空后约 10 秒重置 | 不变 |
+| 较低 app_limited 估速 | 已有估速时一律忽略 | 仅持续严重异常且有待发数据时允许平滑下降 |
+| 普通 app_limited / ACK 聚合补偿 | 保留过滤 | 不变 |
+| adapt 入口、速率下限、恢复 | 原有规则 | 不变，不因本次改动突破最低速率 |
+| 默认值及升级参数保留 | 原有默认和运行中参数 | 不变，无新增模块参数 |
 
-保持默认参数、动态目标计算、CWND、pacing、RTT 门槛和快速退出逻辑不变。没有新增调参项、定时器、逐包日志或动态内存分配，私有状态仍在 88 字节内。
+默认参数、目标公式、CWND、pacing、RTT 门槛和快速退出逻辑不变。利用状态结构中的剩余空间记录确认时间和重传计数低位，私有状态仍为 88 字节；不增加定时器、逐包日志或动态内存分配。
+
+放开低速 app_limited 样本需要连续有效窗口累计至少约 10 秒：adaptive 开启、turbo 关闭、路径分类为 CONGESTED，丢包 EWMA 至少达到 max(30%, loss_congest_pct)，每个窗口至少交付 8 包且不超过 2 秒，并有新增标记丢包、新增实际重传、至少 1 MSS 的未发送数据。仅有未确认数据不代表持续供数。一个不合格窗口或观察到待发数据不足会重新计时；这是回调观察到的持续性，不是每连接后台定时监控。
+
+计时从第一个合格窗口结束后开始，EWMA 暖机还需要额外时间，所以并非从第一次重传起恰好 10 秒触发。重传计数低 16 位只用于确认发生变化，不计算比例；恰好增加 65536 的整数倍时保守地放弃本次确认。此处 30% 是既有丢包标记指标的 EWMA，不是重传字节占比；不会复用 1% 中度门槛作为严重异常判据。
 
 ## 默认参数
 
@@ -75,7 +81,7 @@ EWMA = 旧值 + 约 1/8 × (本次指标 - 旧值)
 
 原有严重入口仍保留：EWMA 达到 30%，或 RTT 膨胀超过基线的 80% 加抖动余量、累计 20 个合格 RTT 轮次且 EWMA 达到 25%。RTT 学习仍要求至少 8 个 delivered 包、采样不超过 2 秒。
 
-丢包和 RTT 学习接受 app_limited；但保留该标记对低速带宽样本的保护，不因应用暂时没数据就拉低带宽估计。其语义见 [Linux TCP rate sampling](https://github.com/torvalds/linux/blob/v6.12/net/ipv4/tcp_rate.c)。
+丢包和 RTT 学习接受 app_limited；低速带宽样本默认仍被过滤，仅在上述严重异常条件持续满足时参与下降。ACK 聚合补偿中的过滤不变。其语义见 [Linux TCP rate sampling](https://github.com/torvalds/linux/blob/v6.12/net/ipv4/tcp_rate.c)。
 
 ```text
 AVOIDING 中目标 = clamp(平滑 ACK 到达速率 × 1.05, rate × min_rate_pct / 100, rate)
@@ -96,7 +102,7 @@ ACK 回调观察到队列排空后开始空闲计时。约 10 秒后在后续回
 
 lotspeed rate-status 通过 ss 的 pacing 推测状态，并区分最近 10 秒发送过数据和空闲/停滞连接。它不是内部状态读取，也不能把最近发送过的所有连接都当成持续下载。应对异常连接采集同一四元组的多次 ss -tinm，比较增量，不能只追求 adapt 数量多。
 
-python3 tests/run_model_tests.py 编译实际生产函数，测试短窗口累积、单次和持续丢包、app_limited、积压保护、空闲复用、计数器回绕、过期和 1～255 确认设置。CI 在 HZ=100/250/1000 下运行这些逻辑测试并进行内核模块编译；这不是生产网络性能验证。
+python3 tests/run_model_tests.py 编译实际生产函数，测试短窗口累积、单次和持续丢包、普通及严重异常 app_limited 估速、ACK 聚合保护、确认中断、积压保护、空闲复用、计数器回绕、过期和 1～255 确认设置。CI 在 HZ=100/250/1000 下运行这些逻辑测试并进行内核模块编译；这不是生产网络性能验证，也不保证把总重传比压到某个值。
 
 主预设的缓冲区设置保持：
 

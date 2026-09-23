@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.11 fresh-loss adaptive entry
+// lotspeed.c - v3.10.12 qualified app-limited loss learning
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -42,6 +42,8 @@
 #define LOTSPEED_CONGEST_MIN_DELIVERED 8
 #define LOTSPEED_CONGEST_MAX_SAMPLE_US (2ULL * USEC_PER_SEC)
 #define LOTSPEED_LOSS_MAX_SAMPLE_MS 2000
+#define LOTSPEED_APP_LOSS_HOLD_MS 10000
+#define LOTSPEED_APP_LOSS_MIN_PCT 30
 
 // Linux 6.10 restored ack/flag arguments to cong_control().
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
@@ -476,6 +478,8 @@ struct lotspeed {
     u8 path_mode;
     bool ss_mode;
     bool mux_drained;
+    u16 app_loss_retrans;
+    u16 app_loss_ms;
 };
 
 // 将状态转换为字符串，用于日志
@@ -535,6 +539,7 @@ static void lotspeed_init(struct sock *sk)
     ca->loss_delivered = tp->delivered;
     ca->loss_lost = tp->lost;
     ca->loss_stamp = tcp_jiffies32;
+    ca->app_loss_retrans = (u16)tp->total_retrans;
     ca->path_mode = PATH_STABLE;
     ca->target_rate = lotserver_rate;
 
@@ -785,6 +790,7 @@ static bool lotspeed_sample_loss(struct sock *sk, u32 now,
         /* Stale/unobserved intervals are neither healthy nor fresh losses. */
         ca->loss_ewma = 0;
         ca->loss_adapt_count = 0;
+        ca->app_loss_ms = 0;
         ca->loss_delivered = tp->delivered;
         ca->loss_lost = tp->lost;
         ca->loss_stamp = now;
@@ -810,6 +816,8 @@ static void lotspeed_reset_mux_history(struct sock *sk, u32 now)
 
     ca->target_rate = lotserver_rate;
     ca->actual_rate = 0;
+    ca->app_loss_ms = 0;
+    ca->app_loss_retrans = (u16)tp->total_retrans;
     ca->loss_ewma = 0;
     ca->loss_adapt_count = 0;
     ca->rtt_high_count = 0;
@@ -850,6 +858,40 @@ static void lotspeed_update_mux_activity(struct sock *sk, u32 now)
         lotspeed_reset_mux_history(sk, now);
 }
 
+/* Only sustained severe loss with ongoing demand can override app limitation. */
+static bool lotspeed_app_loss_ready(struct sock *sk, u64 elapsed_us,
+                                    u32 delivered, u32 losses,
+                                    bool qualified, u32 mss)
+{
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct lotspeed *ca = inet_csk_ca(sk);
+    u16 retrans = (u16)tp->total_retrans;
+    bool fresh_retrans = retrans != ca->app_loss_retrans;
+    u32 severe = max_t(u32, lotserver_loss_congest_pct,
+                       LOTSPEED_APP_LOSS_MIN_PCT) * LOTSPEED_LOSS_SCALE / 100;
+
+    /* Low bits detect change, not a retransmission ratio; a collision defers. */
+    ca->app_loss_retrans = retrans;
+    if (!lotserver_adaptive || lotserver_turbo || !qualified || !mss ||
+        !elapsed_us || elapsed_us > LOTSPEED_CONGEST_MAX_SAMPLE_US ||
+        delivered < LOTSPEED_CONGEST_MIN_DELIVERED || !losses ||
+        !fresh_retrans || ca->path_mode != PATH_CONGESTED ||
+        ca->loss_ewma < severe || !before(tp->snd_nxt, tp->write_seq) ||
+        tp->write_seq - tp->snd_nxt < mss) {
+        ca->app_loss_ms = 0;
+        return false;
+    }
+
+    /* One is the start marker; do not count time before first qualification. */
+    if (!ca->app_loss_ms) {
+        ca->app_loss_ms = 1;
+        return false;
+    }
+    ca->app_loss_ms = min_t(u32, LOTSPEED_APP_LOSS_HOLD_MS + 1,
+                            ca->app_loss_ms + elapsed_us / 1000);
+    return ca->app_loss_ms > LOTSPEED_APP_LOSS_HOLD_MS;
+}
+
 /* Update delivery, loss, and ACK aggregation once per packet-timed RTT. */
 static bool lotspeed_update_round_model(struct sock *sk,
                                         const struct rate_sample *rs,
@@ -864,11 +906,16 @@ static bool lotspeed_update_round_model(struct sock *sk,
     u32 path_delivered;
     bool loss_qualified_round;
     bool rtt_qualified_round;
+    bool allow_app_loss;
     u32 elapsed_jiffies;
     u64 elapsed_us;
     u64 delivered_bytes;
     u64 round_rate = 0;
     u64 prior_rate = ca->actual_rate;
+
+    if (!before(tp->snd_nxt, tp->write_seq) ||
+        tp->write_seq - tp->snd_nxt < mss)
+        ca->app_loss_ms = 0;
 
     if (!rs || before(rs->prior_delivered, ca->next_rtt_delivered))
         return false;
@@ -880,6 +927,19 @@ static bool lotspeed_update_round_model(struct sock *sk,
     ca->next_rtt_delivered = tp->delivered;
     ca->round_stamp = now;
 
+    path_delivered = 0;
+    loss_qualified_round = lotspeed_sample_loss(sk, now,
+                                               &path_delivered, &losses);
+    rtt_qualified_round =
+        delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
+        elapsed_us > 0 &&
+        elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
+    lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
+                              loss_qualified_round,
+                              rtt_qualified_round);
+    allow_app_loss = lotspeed_app_loss_ready(sk, elapsed_us, path_delivered,
+                                            losses, loss_qualified_round, mss);
+
     if (delivered && elapsed_us) {
         delivered_bytes = (u64)delivered * mss;
         round_rate = div64_u64(delivered_bytes * USEC_PER_SEC,
@@ -889,7 +949,8 @@ static bool lotspeed_update_round_model(struct sock *sk,
 
         if (!prior_rate) {
             ca->actual_rate = round_rate;
-        } else if (!rs->is_app_limited || round_rate >= prior_rate) {
+        } else if (!rs->is_app_limited || round_rate >= prior_rate ||
+                   allow_app_loss) {
             /* Rise quickly, but let temporary weak rounds decay slowly. */
             if (round_rate >= prior_rate)
                 ca->actual_rate = (prior_rate * 3 + round_rate) / 4;
@@ -911,20 +972,10 @@ static bool lotspeed_update_round_model(struct sock *sk,
         ca->extra_acked = ca->extra_acked * 7 / 8;
     }
 
-    path_delivered = 0;
-    loss_qualified_round = lotspeed_sample_loss(sk, now,
-                                               &path_delivered, &losses);
-    rtt_qualified_round =
-        delivered >= LOTSPEED_CONGEST_MIN_DELIVERED &&
-        elapsed_us > 0 &&
-        elapsed_us <= LOTSPEED_CONGEST_MAX_SAMPLE_US;
-    lotspeed_update_path_mode(sk, path_rtt, path_delivered, losses,
-                              loss_qualified_round,
-                              rtt_qualified_round);
     return true;
 }
 
-// --- v3.10.11 core: fresh-loss adaptive entry ---
+// --- v3.10.12 core: qualified app-limited loss learning ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1329,7 +1380,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.11 - fresh-loss adaptive entry      ║\n");
+    pr_info("║    LotSpeed v3.10.12 - qualified loss learning       ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1403,7 +1454,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.11 Unloaded                      ║\n");
+    pr_info("║        LotSpeed v3.10.12 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1419,6 +1470,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.11-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.11 - fresh-loss adaptive entry");
+MODULE_VERSION("3.10.12-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.12 - qualified app-limited loss learning");
 MODULE_ALIAS("tcp_lotspeed");

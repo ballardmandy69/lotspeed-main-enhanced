@@ -1,19 +1,24 @@
-# LotSpeed 3.10.11 Enhanced
+# LotSpeed 3.10.12 Enhanced
 
-This release changes moderate adaptive entry on top of 3.10.10: fresh,
-qualified loss samples count directly instead of waiting for the loss EWMA
-to cross the moderate threshold. Control remains per underlying TCP, not per
-IP, AnyTLS substream, or a presumed one-TCP-per-user relationship.
+This release changes only lower app-limited bandwidth learning on top of
+3.10.11. Ordinary app-limited samples remain protected. After sustained severe
+loss, fresh retransmissions and observed unsent backlog, lower samples can
+reduce a stale estimate through the existing 1/8 smoothing. Adaptive entry,
+ACK aggregation, pacing, the rate floor and defaults remain unchanged.
 
 ## Install
 
 Run as root:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/main/install-v31011.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.12/install-v31012.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
+
+Alternatively, download the self-extracting installer from the
+[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.12)
+and run `bash lotspeed-3.10.12-enhanced-installer.run` as root.
 
 Upgrades of a loaded module preserve supported runtime parameters and persist
 them in the module configuration. Do not apply a preset unless you intend to
@@ -23,7 +28,23 @@ the previous default congestion algorithm is restored on unload failure.
 For a fresh installation, lotspeed preset mux-throughput applies the default
 module profile and buffer sysctls documented in README.md.
 
-## Changes
+## Qualified App-Limited Learning
+
+Eligibility requires adaptive enabled, turbo disabled, CONGESTED classification,
+loss EWMA >= max(30%, loss_congest_pct), at least eight delivered packets per
+qualified window, newly marked losses, new retransmissions and at least one MSS
+of unsent data. Eligible windows must span at least ten seconds after the first
+one; EWMA warm-up adds time. An invalid window, an interval over two seconds or
+observed insufficient backlog resets confirmation. This is callback-observed
+persistence, not a per-connection timer. Unacknowledged data alone is not demand.
+
+The low 16 bits of total_retrans detect change only. An exact multiple-of-65536
+collision conservatively rejects a sample. The severe threshold is a marked-loss
+EWMA, not a retransmitted-byte fraction. Two u16 fields fit existing padding,
+keeping private state at 88 bytes. No new public parameters or allocations are
+introduced.
+
+## Retained Entry and Recovery
 
 - A separate paired delivered/lost snapshot is consumed only when eligible.
   Zero elapsed ticks or no delivery retains evidence for the next sample.
@@ -45,7 +66,8 @@ retransmitted bytes, physical packet-loss probability, or remote application
 goodput. Loss needs at least one delivered packet and a nonzero interval of
 at most two seconds; RTT still needs eight packets over a nonzero interval
 of at most two seconds. Both accept app-limited traffic. The bandwidth
-estimator still rejects lower app-limited samples once it has an estimate.
+estimator rejects lower app-limited samples unless the new severe-loss
+qualification is satisfied. ACK-aggregation filtering is unchanged.
 
 The moderate default remains 3% with five fresh-loss confirmations. The
 current sample and threshold use integer 1/1024 units. When a sample cannot

@@ -33,7 +33,8 @@ state = SOURCE[SOURCE.index("enum lotspeed_state {"):
 functions = [
     "lotspeed_scale_percent", "lotspeed_rtt_inflated", "lotspeed_update_path_mode",
     "lotspeed_sample_loss", "lotspeed_reset_mux_history",
-    "lotspeed_update_mux_activity", "lotspeed_update_round_model",
+    "lotspeed_update_mux_activity", "lotspeed_app_loss_ready",
+    "lotspeed_update_round_model",
     "lotspeed_cwnd_event",
 ]
 unit = "\n".join([
