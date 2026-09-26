@@ -1,24 +1,24 @@
-# LotSpeed 3.10.12 Enhanced
+# LotSpeed 3.10.13 Enhanced
 
-This release changes only lower app-limited bandwidth learning on top of
-3.10.11. Ordinary app-limited samples remain protected. After sustained severe
-loss, fresh retransmissions and observed unsent backlog, lower samples can
-reduce a stale estimate through the existing 1/8 smoothing. Adaptive entry,
-ACK aggregation, pacing, the rate floor and defaults remain unchanged.
+This release fixes lower app-limited bandwidth learning on top of 3.10.12
+for sustained severe retransmissions of outstanding data, even when no new
+writes remain. Brief unqualified rounds pause rather than erase confirmation.
+Ordinary app-limited samples remain protected. Adaptive entry, ACK aggregation,
+pacing, the rate floor and defaults remain unchanged.
 
 ## Install
 
 Run as root:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.12/install-v31012.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.13/install-v31013.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
 
 Alternatively, download the self-extracting installer from the
-[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.12)
-and run `bash lotspeed-3.10.12-enhanced-installer.run` as root.
+[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.13)
+and run `bash lotspeed-3.10.13-enhanced-installer.run` as root.
 
 Upgrades of a loaded module preserve supported runtime parameters and persist
 them in the module configuration. Do not apply a preset unless you intend to
@@ -32,17 +32,24 @@ module profile and buffer sysctls documented in README.md.
 
 Eligibility requires adaptive enabled, turbo disabled, CONGESTED classification,
 loss EWMA >= max(30%, loss_congest_pct), at least eight delivered packets per
-qualified window, newly marked losses, new retransmissions and at least one MSS
-of unsent data. Eligible windows must span at least ten seconds after the first
-one; EWMA warm-up adds time. An invalid window, an interval over two seconds or
-observed insufficient backlog resets confirmation. This is callback-observed
-persistence, not a per-connection timer. Unacknowledged data alone is not demand.
+qualified window and new retransmissions. Backlog may be at least one MSS of
+unsent data, or at least eight outstanding packets with at least eight MSS of
+outstanding sequence space. Backlog alone is insufficient. Repeated retransmits
+of already-lost packets do not need newly marked loss in every round.
+
+Confirmation requires ten seconds of qualified observations after the first
+one; EWMA warm-up adds time. Brief unqualified rounds pause confirmation and
+cannot lower the estimate; their time does not count. Two seconds of consecutive
+unqualified rounds, stale samples, drained/insufficient backlog or leaving
+CONGESTED mode clear confirmation. A gap extends wall-clock qualification time.
+This is callback-observed persistence, not a per-connection timer. Higher
+app-limited samples and ordinary non-app-limited learning are unchanged.
 
 The low 16 bits of total_retrans detect change only. An exact multiple-of-65536
 collision conservatively rejects a sample. The severe threshold is a marked-loss
-EWMA, not a retransmitted-byte fraction. Two u16 fields fit existing padding,
-keeping private state at 88 bytes. No new public parameters or allocations are
-introduced.
+EWMA, not a retransmitted-byte fraction. Loss EWMA is bounded to 0..1024 and now
+shares its former 32-bit word with a 16-bit gap counter. Private state remains
+88 bytes, with no new public parameters, allocations or hot-path logging.
 
 ## Retained Entry and Recovery
 
@@ -117,10 +124,12 @@ count of saturated downloads.
 
 python3 tests/run_model_tests.py compiles production controller functions
 against a TCP shim, exercising HZ=100/250/1000, pending evidence, isolated and
-sustained losses, app-limited delivery, idle/backlog, counter wrap, expiry
-and confirmation settings 1-255. CI also checks scripts, metadata and kernel
-builds. These are not live network benchmarks or a guarantee that more flows
-will enter adaptation.
+sustained losses, app-limited delivery, outstanding retransmissions, short-gap
+pausing, idle/backlog, counter wrap, expiry and confirmation settings 1-255.
+The high-rate outstanding-data case is synthetic, not a replay of unobserved
+production callbacks. CI also checks scripts, metadata, parameter preservation
+and kernel builds. These are not live network benchmarks or a guarantee that
+more flows will enter adaptation.
 
 Kernel sampling semantics:
 [Linux 6.12 tcp_rate.c](https://github.com/torvalds/linux/blob/v6.12/net/ipv4/tcp_rate.c).

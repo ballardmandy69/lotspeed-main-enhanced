@@ -16,7 +16,7 @@ REQUIRED = re.search(r"local required_parameters=\((.*?)\)", BODY, re.S).group(1
 
 
 class InstallerTests(unittest.TestCase):
-    def exercise(self, loaded=True, busy=False):
+    def exercise(self, loaded=True, busy=False, overrides=None):
         with tempfile.TemporaryDirectory(prefix="lotspeed-installer-") as temp:
             root = Path(temp)
             config = root / "etc/modprobe.d/lotspeed.conf"
@@ -32,13 +32,14 @@ class InstallerTests(unittest.TestCase):
                           lotserver_loss_adapt_pct="3",
                           lotserver_loss_adapt_samples="1",
                           lotserver_adaptive="Y", lotserver_verbose="N")
+            values.update(overrides or {})
             for name, value in values.items():
                 (params / name).write_text(value)
             (params / "lotserver_removed").write_text("42")
             (params / "lotserver_bad").write_text("1 unexpected=2")
             (root / "supported").write_text("\n".join(
                 name + ":test parameter" for name in [*values, "lotserver_bad"]))
-            (params.parent / "version").write_text("3.10.10-enhanced")
+            (params.parent / "version").write_text("3.10.12-enhanced")
             (build / "lotspeed.ko").write_text("fake compiled module")
             available.write_text("reno cubic lotspeed")
             config.write_text("options lotspeed lotserver_removed=42\n")
@@ -97,13 +98,21 @@ LEGACY_MODULE="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/lotspeed.ko"
                                      {f"{k}={v}" for k, v in values.items()})
                     self.assertNotIn("removed", config.read_text())
                     self.assertNotIn("unexpected", config.read_text())
-                    self.assertIn("lotserver_rate=62000000", config.read_text())
+                    self.assertIn(f"lotserver_rate={values['lotserver_rate']}", config.read_text())
                 else:
                     self.assertEqual(args, ["lotspeed"])
                     self.assertFalse(config.exists())
 
     def test_loaded_parameters_are_preserved(self):
         self.exercise()
+
+    def test_high_rate_custom_profile_is_preserved(self):
+        self.exercise(overrides={
+            "lotserver_rate": "180000000",
+            "lotserver_min_rate_pct": "8",
+            "lotserver_loss_adapt_pct": "1",
+            "lotserver_loss_adapt_samples": "1",
+        })
 
     def test_busy_module_restores_previous_default(self):
         self.exercise(busy=True)

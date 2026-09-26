@@ -12,12 +12,12 @@ jobs:
       - name: Check scripts and release metadata
         run: |
           for script in install*.sh lotspeedctl; do bash -n "$script"; done
-          grep -q 'MODULE_VERSION("3.10.12-enhanced")' lotspeed.c
-          grep -q 'VERSION="3.10.12-enhanced"' install.sh
-          grep -q 'VERSION="3.10.12-enhanced"' lotspeedctl
-          grep -q 'RELEASE_REF="v3.10.12"' install-v31012.sh
-          grep -q 'PACKAGE_VERSION="3.10.12-enhanced"' dkms.conf
-          grep -q 'VERSION.*3.10.12-enhanced' Makefile
+          grep -q 'MODULE_VERSION("3.10.13-enhanced")' lotspeed.c
+          grep -q 'VERSION="3.10.13-enhanced"' install.sh
+          grep -q 'VERSION="3.10.13-enhanced"' lotspeedctl
+          grep -q 'RELEASE_REF="v3.10.13"' install-v31013.sh
+          grep -q 'PACKAGE_VERSION="3.10.13-enhanced"' dkms.conf
+          grep -q 'VERSION.*3.10.13-enhanced' Makefile
           grep -q 'static unsigned long lotserver_rate = 45000000ULL' lotspeed.c
           grep -q 'static unsigned int lotserver_gain = 26' lotspeed.c
           grep -q 'static unsigned int lotserver_min_rate_pct = 50' lotspeed.c
@@ -60,5 +60,5 @@ jobs:
           for header_dir in "${headers[@]}"; do
             make clean KERNEL_DIR="${header_dir}" || true
             make KERNEL_DIR="${header_dir}"
-            test "$(modinfo -F version lotspeed.ko)" = '3.10.12-enhanced'
+            test "$(modinfo -F version lotspeed.ko)" = '3.10.13-enhanced'
           done
