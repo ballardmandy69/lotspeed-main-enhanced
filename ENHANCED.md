@@ -1,24 +1,37 @@
-# LotSpeed 3.10.13 Enhanced
+# LotSpeed 3.10.14 Enhanced
 
-This release fixes lower app-limited bandwidth learning on top of 3.10.12
-for sustained severe retransmissions of outstanding data, even when no new
-writes remain. Brief unqualified rounds pause rather than erase confirmation.
-Ordinary app-limited samples remain protected. Adaptive entry, ACK aggregation,
-pacing, the rate floor and defaults remain unchanged.
+This release fixes premature recovery after a feedback stall on top of 3.10.13.
+Already-severe backlogged flows retain congestion evidence when loss samples
+expire. Healthy feedback and drained MUX idle recovery keep their existing
+behavior. Adaptive entry, app-limited learning, ACK aggregation, pacing gains,
+the rate floor and defaults remain unchanged.
+
+## Stalled Severe Flows
+
+The controller retains loss EWMA and confirmation counts across expired loss
+windows only while adaptive is enabled, turbo is disabled, the path is already
+CONGESTED, EWMA is at least max(30%, loss_congest_pct), and unsent or outstanding
+data remains. Silence alone must not release such a flow to full pacing.
+Expired delivery/loss samples are still discarded and app-limited lower-learning
+confirmation still resets. Fresh healthy samples and the drained MUX idle reset
+retain their existing recovery behavior. Moderate/healthy flows, the rate floor,
+flight window, defaults and private-state size are unchanged. A configured
+800 Mbps ceiling with an 8% floor still has a 64 Mbps per-connection minimum
+target; this release does not lower that floor or guarantee receiver goodput.
 
 ## Install
 
 Run as root:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.13/install-v31013.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.14/install-v31014.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
 
 Alternatively, download the self-extracting installer from the
-[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.13)
-and run `bash lotspeed-3.10.13-enhanced-installer.run` as root.
+[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.14)
+and run `bash lotspeed-3.10.14-enhanced-installer.run` as root.
 
 Upgrades of a loaded module preserve supported runtime parameters and persist
 them in the module configuration. Do not apply a preset unless you intend to
@@ -56,8 +69,9 @@ shares its former 32-bit word with a 16-bit gap counter. Private state remains
 - A separate paired delivered/lost snapshot is consumed only when eligible.
   Zero elapsed ticks or no delivery retains evidence for the next sample.
 - Windows expire after two seconds without a qualifying sample. Expired loss
-  EWMA and counts are cleared; an invalid window is not a synthetic healthy
-  sample and does not itself clear the path classification.
+  EWMA and counts are cleared except for the severe-backlog case
+  above; an invalid window is not a synthetic healthy sample and does not
+  itself clear the path classification.
 - Moderate confirmation now requires at least eight delivered packets,
   newly marked loss, and a current sample at or above loss_adapt_pct. It no
   longer waits for EWMA warm-up. Old EWMA alone cannot add confirmations.

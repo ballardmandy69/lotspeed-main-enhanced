@@ -583,6 +583,153 @@ static void test_app_loss_high_rate_outstanding_pattern(void)
     lotserver_min_rate_pct = saved_floor;
 }
 
+static void control_sample(struct sock *sk, u32 delivered, u32 lost)
+{
+    struct rate_sample rs = {
+        .prior_delivered = sk->tcp.delivered,
+        .is_app_limited = true,
+        .rtt_us = 50000,
+        .acked_sacked = delivered,
+        .losses = lost,
+    };
+    sk->tcp.delivered += delivered;
+    sk->tcp.lost += lost;
+    lotspeed_adapt_and_control(sk, &rs, 0);
+}
+
+static void test_severe_stall_scope_and_boundaries(void)
+{
+    struct sock sk;
+    for (int scenario = 0; scenario < 15; ++scenario) {
+        u32 delivered = 0, lost = 0;
+        bool retain = true;
+        init_app_loss_test(&sk);
+        sk.ca.loss_adapt_count = 1;
+        sk.ca.app_loss_ms = LOTSPEED_APP_LOSS_HOLD_MS + 1;
+        sk.ca.app_loss_gap_ms = 100;
+        sk.tcp.delivered = 50;
+        sk.tcp.lost = 100;
+        switch (scenario) {
+        case 1:
+            sk.tcp.snd_nxt = sk.tcp.write_seq;
+            sk.tcp.packets_out = 1000;
+            break;
+        case 2:
+            sk.tcp.snd_una = sk.tcp.write_seq;
+            sk.tcp.packets_out = 1;
+            break;
+        case 3: sk.tcp.write_seq = 1; break;
+        case 4: sk.tcp.write_seq = 0; retain = false; break;
+        case 5: sk.ca.loss_ewma = 100; retain = false; break;
+        case 6: sk.ca.path_mode = PATH_STABLE; retain = false; break;
+        case 7: sk.ca.path_mode = PATH_JITTERY; retain = false; break;
+        case 8: lotserver_adaptive = false; retain = false; break;
+        case 9: lotserver_turbo = true; retain = false; break;
+        case 10:
+            lotserver_loss_congest_pct = 60;
+            sk.ca.loss_ewma = 59 * LOTSPEED_LOSS_SCALE / 100;
+            retain = false;
+            break;
+        case 11:
+            lotserver_loss_congest_pct = 1;
+            sk.ca.loss_ewma = 20 * LOTSPEED_LOSS_SCALE / 100;
+            retain = false;
+            break;
+        case 12:
+            sk.ca.loss_ewma = 30 * LOTSPEED_LOSS_SCALE / 100;
+            break;
+        case 13:
+            lotserver_loss_congest_pct = 60;
+            sk.ca.loss_ewma = 60 * LOTSPEED_LOSS_SCALE / 100;
+            break;
+        case 14:
+            tcp_jiffies32 = UINT32_MAX - msecs_to_jiffies(1000);
+            sk.ca.loss_stamp = tcp_jiffies32;
+            break;
+        }
+        u16 previous_ewma = sk.ca.loss_ewma;
+        advance_ms(2100);
+        assert(!lotspeed_sample_loss(&sk, tcp_jiffies32, &delivered, &lost));
+        assert(sk.ca.loss_ewma == (retain ? previous_ewma : 0));
+        assert(sk.ca.loss_adapt_count == (retain ? 1 : 0));
+        assert(sk.ca.app_loss_ms == 0 && sk.ca.app_loss_gap_ms == 0);
+        assert(sk.ca.loss_delivered == sk.tcp.delivered);
+        assert(sk.ca.loss_lost == sk.tcp.lost);
+        assert(sk.ca.loss_stamp == tcp_jiffies32);
+    }
+
+    /* The existing two-second validity boundary has not moved. */
+    init_app_loss_test(&sk);
+    advance_ms(2000);
+    sk.tcp.delivered = 8;
+    u32 delivered = 0, lost = 0;
+    assert(lotspeed_sample_loss(&sk, tcp_jiffies32, &delivered, &lost));
+    assert(delivered == 8 && lost == 0);
+}
+
+static void test_severe_stall_pacing_and_recovery(void)
+{
+    struct sock sk;
+    unsigned long saved_rate = lotserver_rate;
+    unsigned int saved_floor = lotserver_min_rate_pct;
+    lotserver_rate = 100000000; /* 800 Mbps, with a 64 Mbps adaptive floor. */
+    lotserver_min_rate_pct = 8;
+    for (int restart = 0; restart < 2; ++restart) {
+        init_app_loss_test(&sk);
+        lotserver_loss_adapt_samples = 1;
+        sk.ca.actual_rate = 1000000;
+        sk.ca.loss_ewma = LOTSPEED_LOSS_SCALE * 80 / 100;
+        sk.ca.loss_adapt_count = 1;
+        sk.tcp.mss_cache = 1380;
+        sk.tcp.snd_nxt = sk.tcp.write_seq = 4 * 1024 * 1024;
+        sk.tcp.packets_out = 3000;
+        advance_ms(100);
+        control_sample(&sk, 80, 320);
+        assert(sk.sk_pacing_rate == 8000000);
+
+        for (int gap = 0; gap < 3; ++gap) {
+            advance_ms(2100);
+            if (restart)
+                lotspeed_cwnd_event(&sk, CA_EVENT_TX_START);
+            else
+                control_sample(&sk, 0, 0);
+            advance_ms(40);
+            control_sample(&sk, 8, 0);
+            if (sk.sk_pacing_rate != 8000000)
+                fprintf(stderr, "severe stalled pacing: expected 64000000, got %llu bps\n",
+                        (unsigned long long)sk.sk_pacing_rate * 8);
+            assert(sk.sk_pacing_rate == 8000000);
+            assert(sk.ca.path_mode == PATH_CONGESTED);
+            assert(sk.ca.state == AVOIDING);
+            assert(sk.ca.app_loss_ms == 0); /* No stale authorization to learn down. */
+        }
+
+        /* Qualified healthy feedback can still recover without draining the queue. */
+        for (int i = 0; i < 60; ++i) {
+            advance_ms(100);
+            control_sample(&sk, 100, 0);
+        }
+        assert(sk.ca.path_mode == PATH_STABLE);
+        assert(sk.ca.state == CRUISING);
+        assert(sk.sk_pacing_rate == 120000000);
+
+        /* A truly drained AnyTLS connection retains the existing idle reset. */
+        sk.ca.path_mode = PATH_CONGESTED;
+        sk.ca.state = AVOIDING;
+        sk.ca.loss_ewma = LOTSPEED_LOSS_SCALE;
+        sk.tcp.snd_una = sk.tcp.write_seq;
+        sk.tcp.packets_out = 0;
+        lotspeed_update_mux_activity(&sk, tcp_jiffies32);
+        advance_ms(LOTSPEED_MUX_IDLE_RESET_MS + 100);
+        control_sample(&sk, 0, 0);
+        assert(sk.ca.path_mode == PATH_STABLE);
+        assert(sk.ca.actual_rate == 0);
+        assert(sk.sk_pacing_rate == 120000000);
+    }
+    lotserver_rate = saved_rate;
+    lotserver_min_rate_pct = saved_floor;
+}
+
 int main(void)
 {
     assert(sizeof(struct lotspeed) <= 88); // oldest advertised private area
@@ -600,6 +747,8 @@ int main(void)
     test_app_loss_short_gaps_and_expiry();
     test_app_loss_small_or_healthy_outstanding();
     test_app_loss_high_rate_outstanding_pattern();
+    test_severe_stall_scope_and_boundaries();
+    test_severe_stall_pacing_and_recovery();
     printf("PASS: controller regression cases, HZ=%d, state=%zu bytes\n",
            HZ, sizeof(struct lotspeed));
     return 0;

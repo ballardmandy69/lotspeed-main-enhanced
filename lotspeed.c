@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.13 outstanding retransmission recovery
+// lotspeed.c - v3.10.14 stalled severe-flow recovery
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -801,6 +801,12 @@ static bool lotspeed_has_app_loss_backlog(const struct tcp_sock *tp, u32 mss)
                (u64)mss * LOTSPEED_CONGEST_MIN_DELIVERED;
 }
 
+static u32 lotspeed_severe_loss_threshold(void)
+{
+    return max_t(u32, lotserver_loss_congest_pct,
+                 LOTSPEED_APP_LOSS_MIN_PCT) * LOTSPEED_LOSS_SCALE / 100;
+}
+
 static bool lotspeed_sample_loss(struct sock *sk, u32 now,
                                  u32 *delivered, u32 *losses)
 {
@@ -809,9 +815,17 @@ static bool lotspeed_sample_loss(struct sock *sk, u32 now,
     u32 elapsed = now - ca->loss_stamp;
 
     if (elapsed > msecs_to_jiffies(LOTSPEED_LOSS_MAX_SAMPLE_MS)) {
-        /* Stale/unobserved intervals are neither healthy nor fresh losses. */
-        ca->loss_ewma = 0;
-        ca->loss_adapt_count = 0;
+        bool retain_congestion = lotserver_adaptive && !lotserver_turbo &&
+            ca->path_mode == PATH_CONGESTED &&
+            ca->loss_ewma >= lotspeed_severe_loss_threshold() &&
+            (tp->write_seq != tp->snd_una || tp->packets_out);
+
+        /* A severe backlogged flow needs fresh recovery evidence, not silence. */
+        if (!retain_congestion) {
+            ca->loss_ewma = 0;
+            ca->loss_adapt_count = 0;
+        }
+        /* Always discard the stale sample and its lower-learning permission. */
         lotspeed_reset_app_loss(ca);
         ca->loss_delivered = tp->delivered;
         ca->loss_lost = tp->lost;
@@ -889,8 +903,7 @@ static bool lotspeed_app_loss_ready(struct sock *sk, u64 elapsed_us,
     struct lotspeed *ca = inet_csk_ca(sk);
     u16 retrans = (u16)tp->total_retrans;
     bool fresh_retrans = retrans != ca->app_loss_retrans;
-    u32 severe = max_t(u32, lotserver_loss_congest_pct,
-                       LOTSPEED_APP_LOSS_MIN_PCT) * LOTSPEED_LOSS_SCALE / 100;
+    u32 severe = lotspeed_severe_loss_threshold();
 
     /* Low bits detect change, not a retransmission ratio; a collision defers. */
     ca->app_loss_retrans = retrans;
@@ -1009,7 +1022,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10.13 core: qualified app-limited loss learning ---
+// --- v3.10.14 core: preserve severe congestion across feedback stalls ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1414,7 +1427,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.13 - qualified loss learning       ║\n");
+    pr_info("║    LotSpeed v3.10.14 - severe stall recovery         ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1488,7 +1501,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.13 Unloaded                      ║\n");
+    pr_info("║        LotSpeed v3.10.14 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1504,6 +1517,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.13-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.13 - outstanding retransmission recovery");
+MODULE_VERSION("3.10.14-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.14 - stalled severe-flow recovery");
 MODULE_ALIAS("tcp_lotspeed");

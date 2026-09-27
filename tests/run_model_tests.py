@@ -32,11 +32,12 @@ state = SOURCE[SOURCE.index("enum lotspeed_state {"):
                SOURCE.index("static const char* state_to_str")]
 functions = [
     "lotspeed_scale_percent", "lotspeed_adaptive_floor",
-    "lotspeed_rtt_inflated", "lotspeed_update_path_mode",
+    "lotspeed_update_rtt", "lotspeed_rtt_inflated", "lotspeed_update_path_mode",
     "lotspeed_reset_app_loss", "lotspeed_has_app_loss_backlog",
-    "lotspeed_sample_loss", "lotspeed_reset_mux_history",
+    "lotspeed_severe_loss_threshold", "lotspeed_sample_loss", "lotspeed_reset_mux_history",
     "lotspeed_update_mux_activity", "lotspeed_app_loss_ready",
     "lotspeed_update_round_model",
+    "lotspeed_adapt_and_control",
     "lotspeed_cwnd_event",
 ]
 unit = "\n".join([

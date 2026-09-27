@@ -39,7 +39,7 @@ class InstallerTests(unittest.TestCase):
             (params / "lotserver_bad").write_text("1 unexpected=2")
             (root / "supported").write_text("\n".join(
                 name + ":test parameter" for name in [*values, "lotserver_bad"]))
-            (params.parent / "version").write_text("3.10.12-enhanced")
+            (params.parent / "version").write_text("3.10.13-enhanced")
             (build / "lotspeed.ko").write_text("fake compiled module")
             available.write_text("reno cubic lotspeed")
             config.write_text("options lotspeed lotserver_removed=42\n")
@@ -116,6 +116,17 @@ LEGACY_MODULE="$TEST_ROOT/lib/modules/test/kernel/net/ipv4/lotspeed.ko"
 
     def test_busy_module_restores_previous_default(self):
         self.exercise(busy=True)
+
+    def test_800mbps_profile_is_preserved(self):
+        self.exercise(overrides={
+            "lotserver_rate": "100000000",
+            "lotserver_min_rate_pct": "8",
+            "lotserver_loss_adapt_pct": "3",
+            "lotserver_loss_adapt_samples": "1",
+            "lotserver_gain": "26",
+            "lotserver_min_flight_ms": "250",
+            "lotserver_pacing_gain": "120",
+        })
 
     def test_fresh_load_has_no_stale_options(self):
         self.exercise(loaded=False)

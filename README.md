@@ -1,21 +1,21 @@
-# LotSpeed 3.10.13 Enhanced
+# LotSpeed 3.10.14 Enhanced
 
-基于 3.10.12，修复新数据队列为空、但旧数据持续大量重传时，较低的 app_limited 样本仍无法下修估速的问题。
-严重保护同时识别待发新数据与足量待确认旧数据，短暂无重传只暂停确认；普通间歇流量仍保留过滤。
+基于 3.10.13，修复已判定严重拥塞且仍有积压的连接，在反馈停顿后因丢包历史清零而过早恢复全速的问题。
+过期采样仍丢弃，但符合严重条件的积压连接保留拥塞依据；收到健康反馈后仍按原规则恢复。
 每个底层 TCP 独立判断，不按 IP 或连接数量配额限速。
 
 ## 安装与升级
 
-以 root 安装或升级到固定版本 3.10.13：
+以 root 安装或升级到固定版本 3.10.14：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.13/install-v31013.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.14/install-v31014.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
 
-也可从 [发布页](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.13)
-下载自解压安装器，以 root 执行 `bash lotspeed-3.10.13-enhanced-installer.run`。
+也可从 [发布页](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.14)
+下载自解压安装器，以 root 执行 `bash lotspeed-3.10.14-enhanced-installer.run`。
 
 升级已加载的旧模块时，安装器保留新版本支持的运行中模块参数，包括自定义 rate、gain、min_rate_pct 和确认次数，并写入模块配置。不要再运行 preset，除非确实要覆盖自定义值。旧模块没有加载时，不会从旧配置文件自动迁移参数。
 
@@ -27,20 +27,26 @@ lotspeed rate-status
 lotspeed preset mux-throughput
 ```
 
-## 与 3.10.12 的区别
+## 与 3.10.13 的区别
 
-| 部分 | 3.10.12 | 3.10.13 |
+| 部分 | 3.10.13 | 3.10.14 |
 | --- | --- | --- |
-| 严重保护的积压依据 | 至少 1 MSS 尚未发送的新数据 | 同时认可至少 8 包、8 MSS 的已发送待确认数据 |
-| 每轮证据 | 新增标记丢包及新增重传均必需 | 严重 EWMA 达标且有新增重传；旧包再次重传不要求重新标记丢失 |
-| 短暂不合格窗口 | 立即清零确认 | 暂停、不下修估速；连续累计 2 秒不合格再清零 |
-| 普通 app_limited / ACK 聚合补偿 | 保留过滤 | 不变 |
-| adapt 入口、速率下限、恢复 | 原有规则 | 不变，不因本次改动突破最低速率 |
-| 默认值及升级参数保留 | 原有默认和运行中参数 | 不变，无新增模块参数 |
+| 超过 2 秒的丢包采样 | 清零丢包 EWMA 和中度确认计数 | 已严重拥塞且仍有积压时保留，否则仍清零 |
+| 过期数据与低速学习授权 | 丢弃过期样本，清零 app_limited 严重确认 | 不变，不用旧样本继续下修估速 |
+| 健康反馈与排空 MUX | 按既有规则恢复或空闲重置 | 不变，不因等待反馈本身直接解除严重拥塞 |
+| 普通/中度连接、adapt 入口 | 原有规则 | 不变 |
+| 默认值、速率保底、gain 与升级参数保留 | 原有参数 | 不变，无新增模块参数 |
 
-默认参数、目标公式、CWND、pacing、RTT 门槛和快速退出逻辑不变。
-将取值为 0～1024 的 loss EWMA 存为 u16，腾出两字节记录短暂间隔，私有状态仍为 88 字节；
-不增加公开参数、定时器、逐包日志或动态内存分配。
+保留历史仅适用于 adaptive 开启、turbo 关闭、路径已为 CONGESTED、
+丢包 EWMA 至少 max(30%, loss_congest_pct)，并且仍有未发送或待确认数据的连接。
+此处保留的是拥塞分类依据，不是过期窗口的交付/丢包计数，也不是低速学习的 10 秒授权。
+默认参数、目标公式、CWND、pacing 增益和有效样本驱动的恢复不变，私有状态仍为 88 字节；
+不增加定时器、逐包日志或动态内存分配。
+
+例如 rate=800 Mbps、min_rate_pct=8 时，每条连接仍有 64 Mbps 目标下限。
+本次只修复错误解除限制，不突破保底，也不保证这个下限适合所有严重异常连接。
+
+### 保留的 3.10.13 严重学习规则
 
 放开低速 app_limited 样本仍需有效观察累计至少约 10 秒：adaptive 开启、turbo 关闭、路径分类为 CONGESTED，
 丢包 EWMA 至少达到 max(30%, loss_congest_pct)，每个窗口至少交付 8 包且不超过 2 秒，并有新增实际重传。

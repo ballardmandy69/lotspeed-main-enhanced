@@ -1,6 +1,7 @@
 struct sock {
     struct tcp_sock tcp;
     struct lotspeed ca;
+    u64 sk_pacing_rate, sk_max_pacing_rate;
 };
 #define tcp_sk(sk) (&(sk)->tcp)
 #define inet_csk_ca(sk) (&(sk)->ca)
@@ -21,6 +22,10 @@ static void init_test(struct sock *sk)
     sk->ca.rtt_min = 50000;
     sk->ca.target_rate = lotserver_rate;
     sk->ca.mux_drained = true;
+    sk->tcp.srtt_us = 50000 << 3;
+    sk->tcp.mss_cache = 1440;
+    sk->tcp.snd_cwnd_clamp = UINT32_MAX;
+    sk->sk_max_pacing_rate = UINT64_MAX;
     lotserver_adaptive = true;
     lotserver_turbo = false;
     lotserver_loss_congest_pct = 30;

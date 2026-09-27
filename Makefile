@@ -1,4 +1,4 @@
-VERSION		:= 3.10.13-enhanced
+VERSION		:= 3.10.14-enhanced
 KERNEL_RELEASE  ?= $(shell uname -r)
 KERNEL_DIR      ?= /lib/modules/$(KERNEL_RELEASE)/build
 obj-m           += lotspeed.o
