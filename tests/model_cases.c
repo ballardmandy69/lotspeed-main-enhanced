@@ -730,6 +730,49 @@ static void test_severe_stall_pacing_and_recovery(void)
     lotserver_min_rate_pct = saved_floor;
 }
 
+static void test_loss_event_pacing_cap(void)
+{
+    struct sock sk;
+    unsigned long saved_rate = lotserver_rate;
+    unsigned int saved_floor = lotserver_min_rate_pct;
+
+    lotserver_rate = 100000000; /* 800 Mbps; configured floor is 64 Mbps. */
+    lotserver_min_rate_pct = 8;
+
+    init_app_loss_test(&sk);
+    sk.ca.actual_rate = 1000000; /* Effective rate is far below the floor. */
+    sk.ca.target_rate = lotserver_rate;
+    sk.sk_pacing_rate = 120000000;
+    lotspeed_set_state_hook(&sk, TCP_CA_Loss);
+    assert(sk.ca.state == AVOIDING);
+    assert(sk.ca.target_rate == 4000000); /* 32 Mbps emergency floor. */
+    assert(sk.sk_pacing_rate == 4000000);
+
+    /* The next ACK callback must preserve the temporary cap. */
+    advance_ms(100);
+    control_sample(&sk, 8, 0);
+    assert(sk.ca.target_rate == 4000000);
+    assert(sk.sk_pacing_rate == 4000000);
+
+    init_app_loss_test(&sk);
+    sk.ca.actual_rate = 50000000; /* 400 Mbps; use 1.5x effective rate. */
+    sk.ca.target_rate = lotserver_rate;
+    sk.sk_pacing_rate = 120000000;
+    lotspeed_set_state_hook(&sk, TCP_CA_Loss);
+    assert(sk.ca.target_rate == 75000000);
+    assert(sk.sk_pacing_rate == 75000000);
+
+    /* A non-congested loss event must not touch pacing. */
+    init_test(&sk);
+    sk.sk_pacing_rate = 120000000;
+    lotspeed_set_state_hook(&sk, TCP_CA_Loss);
+    assert(sk.ca.state == CRUISING);
+    assert(sk.sk_pacing_rate == 120000000);
+
+    lotserver_rate = saved_rate;
+    lotserver_min_rate_pct = saved_floor;
+}
+
 int main(void)
 {
     assert(sizeof(struct lotspeed) <= 88); // oldest advertised private area
@@ -749,6 +792,7 @@ int main(void)
     test_app_loss_high_rate_outstanding_pattern();
     test_severe_stall_scope_and_boundaries();
     test_severe_stall_pacing_and_recovery();
+    test_loss_event_pacing_cap();
     printf("PASS: controller regression cases, HZ=%d, state=%zu bytes\n",
            HZ, sizeof(struct lotspeed));
     return 0;

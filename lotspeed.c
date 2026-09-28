@@ -1,4 +1,4 @@
-// lotspeed.c - v3.10.14 stalled severe-flow recovery
+// lotspeed.c - v3.10.15 loss-event pacing clamp
 // Author: uk0
 // Conservative integration of the proven main behavior with selected
 // high-delay, loss-guard and shallow ProbeRTT ideas from later branches.
@@ -780,6 +780,46 @@ static u64 lotspeed_adaptive_floor(void)
                  125000);
 }
 
+/* Keep a loss event from leaving the previous high pacing rate in effect. */
+static u64 lotspeed_loss_event_cap_rate(const struct lotspeed *ca)
+{
+    u64 configured_floor = lotspeed_adaptive_floor();
+    u64 emergency_floor = max_t(u64, configured_floor / 2, 125000);
+    u64 effective_rate = ca->actual_rate;
+    u64 cap_rate;
+
+    if (effective_rate < configured_floor / 2)
+        cap_rate = max_t(u64,
+                         lotspeed_scale_percent(effective_rate, 200),
+                         emergency_floor);
+    else
+        cap_rate = max_t(u64,
+                         configured_floor,
+                         lotspeed_scale_percent(effective_rate, 150));
+
+    return min_t(u64, cap_rate, (u64)lotserver_rate);
+}
+
+static void lotspeed_apply_loss_pacing(struct sock *sk)
+{
+    struct lotspeed *ca = inet_csk_ca(sk);
+    u64 cap_rate;
+
+    if (!lotserver_adaptive || lotserver_turbo ||
+        ca->path_mode != PATH_CONGESTED)
+        return;
+
+    cap_rate = lotspeed_loss_event_cap_rate(ca);
+    if (!ca->target_rate || ca->target_rate > cap_rate)
+        ca->target_rate = cap_rate;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
+    if (!sk->sk_pacing_rate || sk->sk_pacing_rate > cap_rate)
+        WRITE_ONCE(sk->sk_pacing_rate,
+                   min_t(u64, cap_rate, sk->sk_max_pacing_rate));
+#endif
+}
+
 static void lotspeed_reset_app_loss(struct lotspeed *ca)
 {
     ca->app_loss_ms = 0;
@@ -1022,7 +1062,7 @@ static bool lotspeed_update_round_model(struct sock *sk,
     return true;
 }
 
-// --- v3.10.14 core: preserve severe congestion across feedback stalls ---
+// --- v3.10.15 core: preserve severe congestion and clamp loss-event pacing ---
 static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample *rs, int flag)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -1120,9 +1160,14 @@ static void lotspeed_adapt_and_control(struct sock *sk, const struct rate_sample
 
     if (lotserver_adaptive && ca->state == AVOIDING &&
         ca->actual_rate > 0) {
-        ca->target_rate = clamp_t(u64,
+        u64 avoiding_rate = clamp_t(u64,
             lotspeed_scale_percent(ca->actual_rate, 105),
             adaptive_floor, (u64)lotserver_rate);
+
+        /* Preserve a temporary loss-event cap below the normal floor. */
+        if (ca->target_rate && ca->target_rate < lotserver_rate)
+            avoiding_rate = min_t(u64, avoiding_rate, ca->target_rate);
+        ca->target_rate = avoiding_rate;
     } else {
         ca->target_rate = lotserver_rate;
     }
@@ -1329,9 +1374,11 @@ static void lotspeed_set_state_hook(struct sock *sk, u8 new_state)
                 }
                 return;
             }
-            /* A single RTO still reduces cwnd, but cannot lower the rate. */
-            if (ca->path_mode == PATH_CONGESTED)
+            /* A severe RTO also clamps pacing until qualified feedback recovers. */
+            if (ca->path_mode == PATH_CONGESTED) {
                 enter_state(sk, AVOIDING);
+                lotspeed_apply_loss_pacing(sk);
+            }
 
             if (lotserver_verbose &&
                 (tp->total_retrans == 1 || tp->total_retrans % 10 == 0))
@@ -1427,7 +1474,7 @@ static int __init lotspeed_module_init(void)
     BUILD_BUG_ON(sizeof(struct lotspeed) > ICSK_CA_PRIV_SIZE);
 
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║    LotSpeed v3.10.14 - severe stall recovery         ║\n");
+    pr_info("║    LotSpeed v3.10.15 - loss-event pacing clamp      ║\n");
 
     snprintf(buffer, sizeof(buffer), "uk0 @ 2025-11-20 18:58:51");
     print_boxed_line("          Created by ", buffer);
@@ -1501,7 +1548,7 @@ static void __exit lotspeed_module_exit(void)
 
     // v2.1风格的卸载统计
     pr_info("╔════════════════════════════════════════════════════════╗\n");
-    pr_info("║        LotSpeed v3.10.14 Unloaded                      ║\n");
+    pr_info("║        LotSpeed v3.10.15 Unloaded                      ║\n");
     pr_info("║          Time: %s                     ║\n", CURRENT_TIMESTAMP);
     pr_info("║          User: uk0                                     ║\n");
     pr_info("║          Active Connections: %-26d║\n", active_conns);
@@ -1517,6 +1564,6 @@ module_exit(lotspeed_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("uk0 <github.com/uk0>");
-MODULE_VERSION("3.10.14-enhanced");
-MODULE_DESCRIPTION("LotSpeed v3.10.14 - stalled severe-flow recovery");
+MODULE_VERSION("3.10.15-enhanced");
+MODULE_DESCRIPTION("LotSpeed v3.10.15 - loss-event pacing clamp");
 MODULE_ALIAS("tcp_lotspeed");

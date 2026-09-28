@@ -1,10 +1,22 @@
-# LotSpeed 3.10.14 Enhanced
+# LotSpeed 3.10.15 Enhanced
 
-This release fixes premature recovery after a feedback stall on top of 3.10.13.
+This release adds an immediate pacing clamp for severe loss events on top of 3.10.14.
 Already-severe backlogged flows retain congestion evidence when loss samples
 expire. Healthy feedback and drained MUX idle recovery keep their existing
 behavior. Adaptive entry, app-limited learning, ACK aggregation, pacing gains,
-the rate floor and defaults remain unchanged.
+the normal rate floor and defaults remain unchanged.
+
+## Loss-Event Pacing Clamp
+
+When an already `CONGESTED` flow enters `TCP_CA_Loss`, the module immediately
+clamps the old pacing rate instead of waiting for the next ACK-driven control
+callback. If the smoothed effective rate is below half of the configured
+adaptive floor, the temporary cap is approximately two times the effective
+rate, with a floor of half the configured adaptive floor. Otherwise the cap is
+at least the configured floor and approximately 1.5 times the effective rate.
+The cap is stored in the existing target-rate field and remains in effect until
+qualified feedback allows normal recovery. Stable and non-congested flows are
+unchanged, and no new module parameter or private-state field is added.
 
 ## Stalled Severe Flows
 
@@ -24,14 +36,14 @@ target; this release does not lower that floor or guarantee receiver goodput.
 Run as root:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.14/install-v31014.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.15/install-v31015.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
 
 Alternatively, download the self-extracting installer from the
-[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.14)
-and run `bash lotspeed-3.10.14-enhanced-installer.run` as root.
+[release page](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.15)
+and run `bash lotspeed-3.10.15-enhanced-installer.run` as root.
 
 Upgrades of a loaded module preserve supported runtime parameters and persist
 them in the module configuration. Do not apply a preset unless you intend to

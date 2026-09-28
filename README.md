@@ -1,21 +1,22 @@
-# LotSpeed 3.10.14 Enhanced
+# LotSpeed 3.10.15 Enhanced
 
-基于 3.10.13，修复已判定严重拥塞且仍有积压的连接，在反馈停顿后因丢包历史清零而过早恢复全速的问题。
+基于 3.10.14，修复严重丢包事件发生后旧 pacing 速率短时间继续生效的问题。
+严重丢包连接会立即进入临时 pacing cap；有效速率远低于配置下限时使用应急下限，避免继续大量重传。
 过期采样仍丢弃，但符合严重条件的积压连接保留拥塞依据；收到健康反馈后仍按原规则恢复。
 每个底层 TCP 独立判断，不按 IP 或连接数量配额限速。
 
 ## 安装与升级
 
-以 root 安装或升级到固定版本 3.10.14：
+以 root 安装或升级到固定版本 3.10.15：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.14/install-v31014.sh | bash
+wget -qO- https://raw.githubusercontent.com/ballardmandy69/lotspeed-main-enhanced/v3.10.15/install-v31015.sh | bash
 lotspeed status
 lotspeed rate-status
 ```
 
-也可从 [发布页](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.14)
-下载自解压安装器，以 root 执行 `bash lotspeed-3.10.14-enhanced-installer.run`。
+也可从 [发布页](https://github.com/ballardmandy69/lotspeed-main-enhanced/releases/tag/v3.10.15)
+下载自解压安装器，以 root 执行 `bash lotspeed-3.10.15-enhanced-installer.run`。
 
 升级已加载的旧模块时，安装器保留新版本支持的运行中模块参数，包括自定义 rate、gain、min_rate_pct 和确认次数，并写入模块配置。不要再运行 preset，除非确实要覆盖自定义值。旧模块没有加载时，不会从旧配置文件自动迁移参数。
 
@@ -45,6 +46,18 @@ lotspeed preset mux-throughput
 
 例如 rate=800 Mbps、min_rate_pct=8 时，每条连接仍有 64 Mbps 目标下限。
 本次只修复错误解除限制，不突破保底，也不保证这个下限适合所有严重异常连接。
+
+## 与 3.10.14 的区别
+
+| 部分 | 3.10.14 | 3.10.15 |
+| --- | --- | --- |
+| 严重丢包事件后的 pacing | 等待下一次控制回调更新 | 在 `TCP_CA_Loss` 事件中立即限速 |
+| 有效速率远低于配置下限 | 仍按普通自适应下限 | 临时使用配置下限的 50% 作为应急下限 |
+| pacing cap 计算 | 无 | 有效速率约 1.5～2 倍，并受应急下限保护 |
+| 正常/非拥塞连接 | 不变 | 不变 |
+| 参数与私有状态 | 无新增参数，88 字节 | 无新增参数，88 字节 |
+
+3.10.15 不修改 `lotserver_min_rate_pct`。应急下限只对当前已判定为 `CONGESTED` 的连接临时生效；健康反馈恢复后，仍回到原有目标速率和探测逻辑。
 
 ### 保留的 3.10.13 严重学习规则
 
