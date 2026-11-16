@@ -50,6 +50,15 @@ jobs:
         run: python3 tests/run_model_tests.py
       - name: Exercise upgrade parameter preservation
         run: python3 tests/test_installer.py
+      - name: Check independent companion and standalone installer
+        run: |
+          bash -n install-lotspeed-dup-3.10.17.sh
+          bash -n companion/dupctl
+          python3 tests/test_companion_policy.py
+          python3 tests/test_companion_packets.py
+          python3 tests/test_companion_installer.py
+          python3 tools/build_companion_installer.py "$RUNNER_TEMP/companion-installer.sh"
+          cmp install-lotspeed-dup-3.10.17.sh "$RUNNER_TEMP/companion-installer.sh"
       - name: Install kernel headers
         run: |
           sudo apt-get update
@@ -62,4 +71,7 @@ jobs:
             make clean KERNEL_DIR="${header_dir}" || true
             make KERNEL_DIR="${header_dir}"
             test "$(modinfo -F version lotspeed.ko)" = '3.10.15-enhanced'
+            make -C companion clean KERNEL_DIR="${header_dir}"
+            make -C companion KERNEL_DIR="${header_dir}" W=1
+            test "$(modinfo -F version companion/lotspeed_dup.ko)" = '3.10.17-experimental'
           done

@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Explicit, runtime-only control of the optional 3.10.17 experiment.
+set -Eeuo pipefail
+
+MODULE=lotspeed_dup
+PARAMS="/sys/module/${MODULE}/parameters"
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+root() { [[ ${EUID} -eq 0 ]] || fail 'Run as root.'; }
+loaded() { [[ -d "${PARAMS}" ]] || fail 'Companion module is not loaded.'; }
+number() {
+    [[ "$1" =~ ^[1-9][0-9]{0,5}$ ]] && (( $1 <= $2 )) || fail "Invalid $3: $1"
+}
+status() {
+    local name all=N version=unknown budget=Y flows=4096 queue=8
+    if [[ ! -d "${PARAMS}" ]]; then
+        printf 'lotspeed_dup: not loaded; no companion copies are being scheduled.\n'
+        return
+    fi
+    [[ ! -r "${PARAMS}/all_ports" ]] || all="$(<"${PARAMS}/all_ports")"
+    [[ ! -r "${PARAMS}/../version" ]] || version="$(<"${PARAMS}/../version")"
+    [[ ! -r "${PARAMS}/budgeted" ]] || budget="$(<"${PARAMS}/budgeted")"
+    [[ ! -r "${PARAMS}/max_flows" ]] || flows="$(<"${PARAMS}/max_flows")"
+    [[ ! -r "${PARAMS}/max_queue_mb" ]] || queue="$(<"${PARAMS}/max_queue_mb")"
+    printf 'lotspeed_dup: experimental, init_net only, not a congestion-control algorithm\n'
+    printf 'module_version: %s\n' "${version}"
+    if [[ "${all}" == Y || "${all}" == 1 ]]; then
+        printf 'scope: ALL_PORTS (local TCP only, including new management connections)\n'
+    else
+        printf 'scope: SINGLE_PORT\n'
+    fi
+    printf 'all_ports: %s\n' "${all}"
+    printf 'budgeted: %s\nmax_flows: %s\nmax_queue_mb: %s\n' "${budget}" "${flows}" "${queue}"
+    if [[ "${budget}" == N || "${budget}" == 0 ]]; then
+        printf 'copy_mode: UNBUDGETED_CANDIDATES\n'
+        printf 'max_mbps and budget_pct are ignored; resource/ACK/age safeguards still apply.\n'
+    else
+        printf 'copy_mode: BUDGETED\n'
+    fi
+    for name in enabled port delay_ms max_mbps budget_pct stats; do
+        printf '%s: %s\n' "${name}" "$(<"${PARAMS}/${name}")"
+    done
+}
+
+case "${1:-status}" in
+    build)
+        (( $# == 1 )) || fail 'Usage: bash dupctl build'
+        make -C "${HERE}" "KERNEL_DIR=${KERNEL_DIR:-/lib/modules/$(uname -r)/build}"
+        ;;
+    load)
+        root
+        (( $# >= 2 )) || fail 'Usage: bash dupctl load PORT|all [options]'
+        selected_port="$2"
+        selected_all=0
+        selected_budget=1
+        selected_flows=131072
+        selected_queue=64
+        selected_mbps=10
+        selected_pct=10
+        if [[ "${selected_port}" == all ]]; then
+            (( $# <= 5 )) || fail 'Usage: bash dupctl load all [MAX_FLOWS [QUEUE_MB [DELAY_MS]]]'
+            selected_port=0
+            selected_all=1
+            selected_budget=0
+            selected_flows="${3:-131072}"
+            selected_queue="${4:-64}"
+            selected_delay="${5:-5}"
+        else
+            (( $# <= 6 )) ||
+                fail 'Usage: bash dupctl load PORT [MAX_MBPS [BUDGET_PCT [DELAY_MS [MAX_FLOWS]]]]'
+            number "${selected_port}" 65535 port
+            selected_mbps="${3:-10}"
+            selected_pct="${4:-10}"
+            selected_delay="${5:-5}"
+            selected_flows="${6:-131072}"
+        fi
+        number "${selected_mbps}" 1000 max_mbps
+        number "${selected_pct}" 100 budget_pct
+        number "${selected_delay}" 50 delay_ms
+        number "${selected_flows}" 262144 max_flows
+        number "${selected_queue}" 512 max_queue_mb
+        [[ ! -d "${PARAMS}" ]] || fail 'Already loaded. Disable/unload explicitly before changing scope.'
+        [[ -f "${HERE}/${MODULE}.ko" ]] || fail 'Build first against the running kernel headers.'
+        insmod "${HERE}/${MODULE}.ko" "port=${selected_port}" "all_ports=${selected_all}" \
+            "budgeted=${selected_budget}" "max_mbps=${selected_mbps}" "budget_pct=${selected_pct}" \
+            "delay_ms=${selected_delay}" "max_flows=${selected_flows}" "max_queue_mb=${selected_queue}"
+        printf 'Loaded DISABLED. Review scope before running: bash dupctl enable\n'
+        status
+        ;;
+    enable)
+        root
+        loaded
+        (( $# == 1 )) || fail 'Usage: bash dupctl enable'
+        if [[ -r "${PARAMS}/all_ports" ]] &&
+            [[ "$(<"${PARAMS}/all_ports")" == Y || "$(<"${PARAMS}/all_ports")" == 1 ]]; then
+            printf 'Enabling ALL local TCP ports in init_net, including management connections.\n'
+            printf 'Flow/queue limits are shared; no guarantee every candidate can be copied.\n'
+        else
+            printf 'Enabling optional copies for local port %s in init_net.\n' "$(<"${PARAMS}/port")"
+        fi
+        printf 'Use new test connections; existing established connections are not enrolled.\n'
+        printf '1\n' > "${PARAMS}/enabled"
+        status
+        ;;
+    disable)
+        root
+        loaded
+        (( $# == 1 )) || fail 'Usage: bash dupctl disable'
+        printf '0\n' > "${PARAMS}/enabled"
+        printf 'Disabled and pending candidates purged; already-submitted packets cannot be recalled.\n'
+        status
+        ;;
+    unload)
+        root
+        loaded
+        (( $# == 1 )) || fail 'Usage: bash dupctl unload'
+        printf '0\n' > "${PARAMS}/enabled"
+        rmmod "${MODULE}"
+        printf 'Companion unloaded; LotSpeed/BBR and qdiscs were not changed.\n'
+        ;;
+    status)
+        (( $# <= 1 )) || fail 'Usage: bash dupctl status'
+        status
+        ;;
+    *) fail 'Commands: build, load all [MAX_FLOWS [QUEUE_MB [DELAY_MS]]],' \
+            'load PORT [MAX_MBPS [BUDGET_PCT [DELAY_MS [MAX_FLOWS]]]], enable, disable, status, unload' ;;
+esac

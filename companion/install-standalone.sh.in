@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Self-contained runtime installer. Author: lyt; Date: 2026-11-17.
+set -Eeuo pipefail
+umask 077
+
+ACTION="${1:-install}"
+VERSION=3.10.17-experimental
+EXPECTED_SHA256='@PAYLOAD_SHA256@'
+WORK=''
+KEEP=0
+PHASE=preflight
+fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+cleanup() {
+    if [[ -n "$WORK" && "$KEEP" == 0 ]]; then
+        rm -rf -- "$WORK"
+    fi
+}
+trap cleanup EXIT
+trap 'printf "[ERROR] Failed during %s. No automatic rollback of a replaced module.\n" "$PHASE" >&2' ERR
+
+(( $# <= 1 )) || fail 'Usage: bash SCRIPT [install|status|disable|unload]'
+case "$ACTION" in
+    -h|--help)
+        printf '%s\n' 'Usage: bash SCRIPT [install|status|disable|unload]' \
+            'Default: build, replace companion only, enable ALL local TCP ports.' \
+            'No bandwidth budget; 131072 flow records, 64 MiB queue, 5 ms delay.' \
+            'New connections only, init_net only. No reboot, CC/qdisc changes or boot service.' \
+            'Requires root and installed build tools/current kernel headers; no automatic apt/yum changes.'
+        exit 0 ;;
+    install|status|disable|unload) ;;
+    *) fail "Unknown action: $ACTION" ;;
+esac
+[[ $EUID -eq 0 ]] || fail 'Run as root.'
+[[ -f "${BASH_SOURCE[0]}" ]] || fail 'Download this script to a file before running it; do not pipe to bash.'
+for tool in bash awk base64 sha256sum tar mktemp mkdir rm; do
+    command -v "$tool" >/dev/null || fail "Missing command: $tool"
+done
+
+if [[ "$ACTION" != status ]]; then
+    command -v flock >/dev/null || fail 'Missing command: flock (util-linux).'
+    command -v stat >/dev/null || fail 'Missing command: stat (coreutils).'
+    LOCK_DIR=/run/lotspeed-dup-installer
+    if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
+        mkdir -m 700 -- "$LOCK_DIR"
+    fi
+    [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] || fail 'Unsafe installer lock directory.'
+    [[ "$(stat -c '%u:%a' -- "$LOCK_DIR")" == '0:700' ]] ||
+        fail 'Installer lock directory must be owned by root with mode 700.'
+    [[ ! -L "$LOCK_DIR/lock" ]] || fail 'Installer lock must not be a symbolic link.'
+    [[ ! -e "$LOCK_DIR/lock" || -f "$LOCK_DIR/lock" ]] || fail 'Installer lock is not a regular file.'
+    exec 9>>"$LOCK_DIR/lock"
+    flock -n 9 || fail 'Another companion installer/control operation is running.'
+fi
+
+if [[ "$ACTION" == install ]]; then
+    for tool in uname make cc modinfo insmod rmmod; do
+        command -v "$tool" >/dev/null || fail "Missing command: $tool"
+    done
+    KERNEL="$(uname -r)"
+    export KERNEL_DIR="/lib/modules/${KERNEL}/build"
+    [[ -r "${KERNEL_DIR}/Makefile" ]] ||
+        fail "Install headers matching the RUNNING kernel: $KERNEL (missing $KERNEL_DIR/Makefile)."
+    printf '[INFO] %s: ALL local TCP ports, no ratio/rate budget; includes new SSH connections.\n' "$VERSION"
+    printf '[INFO] Build first; only then replace the companion. Existing flow tracking will be reset.\n'
+    mkdir -p /root/lotspeed-dup-builds
+    WORK="$(mktemp -d /root/lotspeed-dup-builds/3.10.17.XXXXXX)"
+    KEEP=1
+else
+    WORK="$(mktemp -d /tmp/lotspeed-dup-control.XXXXXX)"
+fi
+
+PHASE=payload-verification
+awk 'found { print } $0 == "__LOTSPEED_DUP_PAYLOAD__" { found=1 }' "${BASH_SOURCE[0]}" |
+    base64 --decode > "$WORK/source.tar.gz"
+printf '%s  %s\n' "$EXPECTED_SHA256" "$WORK/source.tar.gz" | sha256sum --check --status
+tar -xzf "$WORK/source.tar.gz" -C "$WORK" --no-same-owner --no-same-permissions
+CTL="$WORK/companion/dupctl"
+[[ -f "$CTL" ]] || fail 'Missing control script in payload.'
+
+if [[ "$ACTION" != install ]]; then
+    PHASE="$ACTION"
+    bash "$CTL" "$ACTION"
+    exit 0
+fi
+
+PHASE=build
+bash "$CTL" build
+KO="$WORK/companion/lotspeed_dup.ko"
+[[ -s "$KO" ]] || fail 'Build did not produce a kernel module.'
+[[ "$(modinfo -F name "$KO")" == lotspeed_dup ]] || fail 'Unexpected module name.'
+[[ "$(modinfo -F version "$KO")" == "$VERSION" ]] || fail 'Unexpected module version.'
+VERMAGIC="$(modinfo -F vermagic "$KO")"
+[[ "${VERMAGIC%% *}" == "$KERNEL" ]] || fail 'Built module does not match the running kernel.'
+
+PHASE=unload-old-companion
+if [[ -d /sys/module/lotspeed_dup ]]; then
+    bash "$CTL" unload
+fi
+PHASE=load-new-companion
+bash "$CTL" load all
+PHASE=enable
+bash "$CTL" enable
+[[ "$(</sys/module/lotspeed_dup/version)" == "$VERSION" ]] || fail 'Loaded version check failed.'
+[[ "$(</sys/module/lotspeed_dup/parameters/enabled)" == Y ]] || fail 'Module is not enabled.'
+printf '[OK] Companion enabled. No CC, qdisc, persistent startup or sysctl changes.\n'
+printf '[INFO] Build retained: %s\n' "$WORK/companion"
+printf '[INFO] Status: bash "%s" status\n' "$CTL"
+printf '[INFO] Stop copies: bash "%s" disable\n' "$CTL"
+printf '[INFO] Remove companion: bash "%s" unload\n' "$CTL"
+printf '[INFO] Or run this installer file again with status, disable, or unload.\n'
+exit 0
+__LOTSPEED_DUP_PAYLOAD__
